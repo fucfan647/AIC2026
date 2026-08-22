@@ -1,0 +1,40 @@
+# Python & Bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+ENV/
+
+# Temporary / Log files
+*.log
+*.tmp
+runtime/
+*.swp
+*.bak
+
+# Large Data & Vector Artifacts (Avoid exceeding GitHub's 100MB file limit)
+*.npy
+*.sqlite
+*.sqlite3
+*.db
+*.jsonl
+artifacts/
+data/
+keyframes/
+synthetic_frames/
+
+# Team Runtime & Local Session State
+team_state.json
+team_captures/
+.user_cache/
+
+# IDE & OS Specific
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini

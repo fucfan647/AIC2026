@@ -1,0 +1,283 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AI Challenge 2026</title>
+  <link rel="stylesheet" href="./styles.css?v=20260820-csv-video-query" />
+</head>
+<body>
+  <div id="appShell" class="app-shell">
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true">A</div>
+        <strong>AI Challenge 2026</strong>
+      </div>
+      <nav id="queryStrip" class="query-strip" aria-label="Danh sách câu hỏi"></nav>
+      <div class="top-actions">
+        <button id="submissionModeToggle" class="submission-mode-toggle" type="button" aria-label="Chế độ nộp bài hiện tại DRES" title="Chuyển giữa DRES và CSV">
+          <span data-mode="dres">DRES</span><span data-mode="csv">CSV</span>
+        </button>
+        <select id="taskType" class="top-select" title="Dạng nộp bài" aria-label="Dạng nộp bài">
+          <option value="kis">KIS</option>
+          <option value="qa">Q&A</option>
+          <option value="trake">TRAKE</option>
+        </select>
+        <input id="qaAnswer" class="top-qa-answer" type="text" placeholder="Câu trả lời Q&A" aria-label="Câu trả lời Q&A" />
+        <button id="qaSubmitBtn" class="primary" type="button" title="Nộp câu trả lời Q&A lên DRES">Nộp Q&A</button>
+        <button id="dresOpenBtn" class="ghost" type="button" title="Đăng nhập và chọn evaluation DRES" aria-label="DRES">DRES</button>
+        <div class="search-mode-control embedding-model-control" aria-label="Mô hình tìm kiếm">
+          <button id="embeddingModelToggle" class="is-active" type="button" aria-label="Mô hình hiện tại MetaCLIP-2; bấm để đổi sang BEiT-3">MetaCLIP-2</button>
+        </div>
+        <button id="clearBtn" class="ghost" type="button" title="Xóa các frame đã chọn" aria-label="Xóa các frame đã chọn" hidden>Xóa lựa chọn</button>
+        <button id="resetBtn" class="ghost" type="button" title="Đặt lại không gian tìm kiếm" aria-label="Đặt lại không gian tìm kiếm" hidden>Đặt lại</button>
+        <button id="logOpenBtn" class="status-pill warning" type="button" title="Xem log trạng thái">Đang kết nối</button>
+      </div>
+    </header>
+
+    <aside class="query-panel">
+      <div class="panel-title">
+        <span>Bộ dựng truy vấn</span>
+      </div>
+      <div class="search-mode-control scene-mode-control" aria-label="Kiểu tìm kiếm">
+        <button id="searchModeToggle" type="button" aria-label="Bật tìm kiếm temporal A đến B đến C">Temporal A→B→C</button>
+      </div>
+      <div id="stageList" class="stage-list"></div>
+      <div id="temporalActions" class="temporal-actions" hidden>
+        <button id="addStageBtn" class="ghost" type="button" title="Thêm hành động vào cuối chuỗi">Thêm hành động</button>
+        <button id="resetTemporalBtn" class="ghost" type="button" title="Xóa session temporal và tìm lại từ Query A">Reset Temporal</button>
+      </div>
+      <div class="search-options">
+        <section class="fusion-control">
+          <label class="ocr-query-field"><span class="query-field-heading"><b class="query-field-badge is-ocr" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2M7 9h10M7 13h10M7 17h6"></path></svg></b>OCR Query</span>
+            <input id="ocrQuery" type="text" placeholder="Nhập chữ xuất hiện trong frame..." autocomplete="off" />
+          </label>
+          <label class="ocr-model-field"><span>Mô hình OCR</span>
+            <select id="ocrModel">
+              <option value="ppocr">PP-OCRv6 · full</option>
+              <option value="monkey">MonkeyOCRv2 · full</option>
+            </select>
+          </label>
+          <output id="ocrWeightValue" hidden>41%</output>
+          <input id="ocrWeight" type="range" min="0" max="100" value="41" step="1" aria-label="Độ chú trọng vào text OCR" aria-valuetext="Text OCR 41%" />
+          <label class="asr-query-field"><span class="query-field-heading"><b class="query-field-badge" aria-hidden="true">A</b>ASR Query</span>
+            <input id="asrQuery" type="text" placeholder="Nhập lời nói cần tìm trong transcript..." autocomplete="off" />
+          </label>
+          <output id="asrWeightValue" hidden>20%</output>
+          <input id="asrWeight" type="range" min="0" max="100" value="20" step="1" aria-label="Độ chú trọng vào lời nói ASR" aria-valuetext="ASR 20%" />
+          <label class="asr-only-control"><input id="asrOnly" type="checkbox" /> <span>Chỉ tìm trong lời nói ASR</span></label>
+          <small class="fusion-weight-summary"><span>Hình ảnh 47%</span><span>Text OCR 33%</span><span>ASR 20%</span></small>
+        </section>
+        <label class="video-query-field"><span class="query-field-heading"><b class="query-field-badge" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"></rect><path d="m10 9 5 3-5 3Z"></path></svg></b>Video Query</span>
+          <input id="videoFilter" type="text" placeholder="Để trống để tìm toàn bộ video" autocomplete="off" />
+        </label>
+        <button id="searchBtn" class="primary" type="button" title="Chạy tìm kiếm video" aria-label="Chạy tìm kiếm video">Tìm kiếm</button>
+        <div id="status" class="status-text" hidden>Sẵn sàng.</div>
+      </div>
+    </aside>
+
+    <main class="results-area">
+      <section class="result-toolbar">
+        <div class="result-summary">
+          <strong id="resultCount">0 kết quả</strong>
+          <button id="searchTimingBtn" class="timing-trigger" type="button" title="Xem chi tiết thời gian tìm kiếm" disabled>
+            Tổng thời gian: chưa có
+          </button>
+          <span id="searchMeta">Chưa tìm kiếm</span>
+        </div>
+      </section>
+      <section id="activeQueryContent" class="active-query-content" hidden></section>
+      <section id="errorBanner" class="error-banner" hidden></section>
+      <section id="results" class="results"></section>
+    </main>
+
+    <section id="selectionTray" class="selection-tray" hidden>
+      <div>
+        <strong id="selectionTitle">Khay chung</strong>
+        <span id="selectionCount" hidden></span>
+        <button id="trakeSubmitBtn" class="primary trake-submit" type="button" title="Nộp TRAKE lên DRES" aria-label="Nộp TRAKE lên DRES" hidden><i data-lucide="send" aria-hidden="true"></i></button>
+      </div>
+      <div id="selectedFrames" class="selected-frames"></div>
+    </section>
+  </div>
+  <div id="videoModal" class="video-modal" hidden>
+    <div class="modal-backdrop" data-close-video></div>
+    <section class="modal-panel video-panel" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+      <header class="modal-head video-head">
+        <strong id="modalTitle">Trình phát video</strong>
+        <button id="closeVideoBtn" class="ghost compact" type="button" title="Đóng video" aria-label="Đóng video">Đóng</button>
+      </header>
+      <div id="videoActiveQueryContent" class="video-active-query-content" hidden></div>
+      <div id="videoShell" class="video-shell">
+        <video id="player" class="modal-video" playsinline preload="metadata"></video>
+      </div>
+      <div class="video-controls" aria-label="Điều khiển video">
+        <div class="video-control-row">
+          <div class="video-control-left">
+            <button id="videoBackBtn" class="video-icon-btn" type="button" title="Lùi 5 giây" aria-label="Lùi 5 giây">‹</button>
+            <button id="videoPlayBtn" class="video-icon-btn video-main-play" type="button" title="Phát/Tạm dừng" aria-label="Phát/Tạm dừng"></button>
+            <button id="videoForwardBtn" class="video-icon-btn" type="button" title="Tiến 5 giây" aria-label="Tiến 5 giây">›</button>
+            <div id="videoVolumeControl" class="video-popover-control">
+              <button id="videoVolumeBtn" class="video-icon-btn" type="button" title="Điều chỉnh âm lượng" aria-label="Điều chỉnh âm lượng" aria-expanded="false"></button>
+              <div id="videoVolumePopover" class="video-popover video-volume-popover" hidden>
+                <input id="videoVolumeSlider" type="range" min="0" max="100" value="100" step="1" aria-label="Âm lượng" />
+                <span id="videoVolumeValue">100%</span>
+              </div>
+            </div>
+          </div>
+          <div class="video-control-center">
+            <input id="videoProgress" class="video-progress" type="range" min="0" max="1000" value="0" step="1" aria-label="Tua video" />
+          </div>
+          <div class="video-control-right" aria-label="Tốc độ và toàn màn hình">
+            <span id="videoTime" class="video-time">0:00 / 0:00</span>
+            <button id="captureFrameBtn" class="video-capture-btn" type="button" title="Thêm đúng frame đang hiển thị vào khay">Thêm vào khay</button>
+            <button id="videoSubmitCurrentBtn" class="video-submit-current-btn" type="button" title="Submit frame đang hiển thị lên DRES" aria-label="Submit frame đang hiển thị lên DRES"><i data-lucide="send"></i></button>
+            <button id="expandShotContextBtn" class="video-context-btn" type="button" title="Xem toàn bộ 24 shot lân cận" disabled><i data-lucide="gallery-horizontal-end"></i>Xem 24 shot</button>
+            <button id="expandFrameContextBtn" class="video-context-btn" type="button" title="Xem 48 frame lân cận frame đang hiển thị"><i data-lucide="images"></i>Xem 48 frame</button>
+            <div id="videoSpeedControl" class="video-popover-control">
+              <button id="videoSpeedBtn" class="video-rate-btn is-active" type="button" title="Chọn tốc độ phát" aria-label="Chọn tốc độ phát" aria-expanded="false">x1</button>
+              <div id="videoSpeedMenu" class="video-popover video-speed-menu" role="menu" hidden>
+                <button class="video-speed-option" type="button" role="menuitemradio" aria-checked="false" data-rate="0.25"><i data-lucide="check"></i><span>x0.25</span></button>
+                <button class="video-speed-option" type="button" role="menuitemradio" aria-checked="false" data-rate="0.5"><i data-lucide="check"></i><span>x0.5</span></button>
+                <button class="video-speed-option is-active" type="button" role="menuitemradio" aria-checked="true" data-rate="1"><i data-lucide="check"></i><span>x1</span></button>
+                <button class="video-speed-option" type="button" role="menuitemradio" aria-checked="false" data-rate="2"><i data-lucide="check"></i><span>x2</span></button>
+                <button class="video-speed-option" type="button" role="menuitemradio" aria-checked="false" data-rate="5"><i data-lucide="check"></i><span>x5</span></button>
+                <button class="video-speed-option" type="button" role="menuitemradio" aria-checked="false" data-rate="10"><i data-lucide="check"></i><span>x10</span></button>
+              </div>
+            </div>
+            <button id="videoFullscreenBtn" class="video-icon-btn" type="button" title="Toàn màn hình" aria-label="Toàn màn hình">⛶</button>
+          </div>
+        </div>
+        <div id="videoFrameStrip" class="video-frame-strip" aria-label="Frame đại diện"></div>
+      </div>
+    </section>
+  </div>
+  <div id="shotOverviewModal" class="video-modal shot-overview-modal" hidden>
+    <div class="modal-backdrop" data-close-shot-overview></div>
+    <section class="modal-panel shot-overview-panel" role="dialog" aria-modal="true" aria-labelledby="shotOverviewTitle">
+      <header class="modal-head image-head">
+        <strong id="shotOverviewTitle">24 shot lân cận</strong>
+        <button id="closeShotOverviewBtn" class="ghost compact" type="button" title="Đóng toàn cảnh" aria-label="Đóng toàn cảnh">Đóng</button>
+      </header>
+      <div id="shotOverviewGrid" class="shot-overview-grid"></div>
+    </section>
+  </div>
+  <div id="frameOverviewModal" class="video-modal shot-overview-modal" hidden>
+    <div class="modal-backdrop" data-close-frame-overview></div>
+    <section class="modal-panel shot-overview-panel" role="dialog" aria-modal="true" aria-labelledby="frameOverviewTitle">
+      <header class="modal-head image-head">
+        <strong id="frameOverviewTitle">48 frame lân cận</strong>
+        <button id="closeFrameOverviewBtn" class="ghost compact" type="button" title="Đóng danh sách frame" aria-label="Đóng danh sách frame">Đóng</button>
+      </header>
+      <div id="frameOverviewGrid" class="shot-overview-grid frame-overview-grid"></div>
+    </section>
+  </div>
+  <div id="imageModal" class="video-modal image-modal" hidden>
+    <div class="modal-backdrop" data-close-image></div>
+    <section class="modal-panel image-panel" role="dialog" aria-modal="true" aria-labelledby="imageTitle">
+      <header class="modal-head image-head">
+        <strong id="imageTitle">Frame</strong>
+        <button id="closeImageBtn" class="ghost compact" type="button" title="Đóng frame" aria-label="Đóng frame">Đóng</button>
+      </header>
+      <div class="image-shell">
+        <img id="imagePreview" class="modal-image" alt="" />
+      </div>
+      <footer class="image-details">
+        <div id="imageMeta" class="image-meta"></div>
+        <button id="imageAddTrayBtn" class="primary image-add-tray" type="button" title="Thêm keyframe này vào khay"><i data-lucide="circle-plus"></i>Thêm vào khay</button>
+      </footer>
+    </section>
+  </div>
+  <div id="dresModal" class="video-modal dres-modal" hidden>
+    <div class="modal-backdrop" data-close-dres></div>
+    <section class="dres-panel" role="dialog" aria-modal="true" aria-labelledby="dresTitle">
+      <header class="modal-head">
+        <strong id="dresTitle">DRES</strong>
+        <button id="closeDresBtn" class="ghost compact" type="button" title="Đóng DRES" aria-label="Đóng DRES">Đóng</button>
+      </header>
+      <div class="dres-body">
+        <div id="dresLoginView" class="submit-fields">
+          <strong>Đăng nhập DRES</strong>
+          <input id="dresServer" type="url" value="http://192.168.28.151:5000" aria-label="DRES server" />
+          <input id="dresUsername" type="text" placeholder="Tên đăng nhập" aria-label="Tên đăng nhập DRES" />
+          <input id="dresPassword" type="password" placeholder="Mật khẩu" aria-label="Mật khẩu DRES" />
+          <button id="dresLoginBtn" class="primary" type="button">Đăng nhập</button>
+        </div>
+        <div id="dresSessionView" class="submit-fields" hidden>
+          <strong>Chọn evaluation</strong>
+          <select id="evaluationSelect" aria-label="Chọn evaluation">
+            <option value="">Chưa có evaluation</option>
+          </select>
+          <button id="chooseEvaluationBtn" class="primary" type="button">Chọn evaluation</button>
+          <button id="dresLogoutBtn" class="ghost" type="button">Đăng xuất</button>
+        </div>
+        <div id="memberNameView" class="submit-fields" hidden>
+          <strong>Tên gọi của bạn</strong>
+          <input id="memberName" type="text" placeholder="Ví dụ: Nghĩa, Đức Anh..." aria-label="Tên gọi của bạn" />
+          <button id="saveMemberNameBtn" class="primary" type="button">Lưu tên gọi</button>
+          <button id="memberBackBtn" class="ghost" type="button">Chọn lại evaluation</button>
+        </div>
+        <div id="dresStatus" class="status-text">Chưa đăng nhập DRES.</div>
+      </div>
+    </section>
+  </div>
+  <div id="logModal" class="video-modal log-modal" hidden>
+    <div class="modal-backdrop" data-close-log></div>
+    <section class="dres-panel" role="dialog" aria-modal="true" aria-labelledby="logTitle">
+      <header class="modal-head">
+        <strong id="logTitle">Log</strong>
+        <button id="closeLogBtn" class="ghost compact" type="button" title="Đóng log" aria-label="Đóng log">Đóng</button>
+      </header>
+      <pre id="logContent" class="log-content">Chưa có log.</pre>
+    </section>
+  </div>
+  <div id="timingModal" class="video-modal timing-modal" hidden>
+    <div class="modal-backdrop" data-close-timing></div>
+    <section class="timing-panel" role="dialog" aria-modal="true" aria-labelledby="timingTitle">
+      <header class="modal-head">
+        <strong id="timingTitle">Chi tiết thời gian tìm kiếm</strong>
+        <button id="closeTimingBtn" class="ghost compact" type="button" title="Đóng bảng thời gian" aria-label="Đóng bảng thời gian">Đóng</button>
+      </header>
+      <div class="timing-body">
+        <div class="timing-overview" aria-label="Tổng quan thời gian">
+          <div>
+            <span>Người dùng chờ</span>
+            <strong id="timingClientTotal">—</strong>
+          </div>
+          <div>
+            <span>Backend xử lý</span>
+            <strong id="timingBackendTotal">—</strong>
+          </div>
+          <div>
+            <span>Ngoài backend</span>
+            <strong id="timingOutsideBackend">—</strong>
+          </div>
+        </div>
+        <p id="timingBackendNote" class="timing-note"></p>
+        <div class="timing-table-wrap">
+          <table class="timing-table">
+            <thead>
+              <tr>
+                <th scope="col">Công đoạn</th>
+                <th scope="col">Thời gian</th>
+                <th scope="col">Ý nghĩa</th>
+              </tr>
+            </thead>
+            <tbody id="timingTableBody"></tbody>
+          </table>
+        </div>
+        <p class="timing-footnote">“Ngoài backend” gồm thời gian qua proxy, truyền dữ liệu và trình duyệt đọc phản hồi. Thời gian tải ảnh kết quả diễn ra sau đó nên chưa nằm trong số này.</p>
+      </div>
+    </section>
+  </div>
+  <div id="correctCelebration" class="correct-celebration" role="status" aria-live="assertive" hidden>
+    <div class="correct-celebration-card">
+      <span>CORRECT</span>
+    </div>
+  </div>
+  <audio id="correctSubmissionSound" src="/correct-submission-sound.mp3" preload="auto"></audio>
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.18/dist/hls.min.js"></script>
+  <script src="https://unpkg.com/lucide@1.27.0/dist/umd/lucide.min.js"></script>
+  <script src="./app.js?v=20260820-csv-video-query"></script>
+</body>
+</html>

@@ -1,0 +1,1413 @@
+from __future__ import annotations
+
+import argparse
+import asyncio
+import csv
+try:
+    import fcntl
+except ImportError:
+    fcntl = None
+import json
+import mimetypes
+import os
+import random
+import re
+import threading
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+import uuid
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
+
+import uvicorn
+from fastapi import FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+
+
+FRONTEND_DIR = Path(__file__).resolve().parent
+TEAM_STATE_PATH = FRONTEND_DIR / "team_state.json"
+TEAM_CAPTURE_DIR = FRONTEND_DIR / "runtime" / "team_captures"
+QUERY_ROOT = (
+    FRONTEND_DIR.parent / "backend" / "query_BTC"
+    if (FRONTEND_DIR.parent / "backend" / "query_BTC").is_dir()
+    else FRONTEND_DIR.parent / "query_demo"
+)
+CSV_SUBMISSION_ROOT = FRONTEND_DIR / "submission"
+HLS_ROOT = Path("/mlcv1/Datasets/HCMAI25/streaming/hls")
+DEFAULT_RECORDS_PATH = (
+    FRONTEND_DIR.parent
+    / "backend/artifacts/current_index/records.sqlite"
+)
+DEFAULT_DELETED_MANIFEST = FRONTEND_DIR.parent / "frames_deleted/active_deleted_manifest.jsonl"
+SUBMISSION_SOUND_ROOT = FRONTEND_DIR.parent / "backend/src"
+SUBMISSION_SOUND_SUFFIXES = {".aac", ".flac", ".m4a", ".mp3", ".ogg", ".wav"}
+FORWARDED_HEADERS = ("Content-Type", "Range", "Accept", "User-Agent")
+QUERY_FILENAME_PATTERN = re.compile(r"^query-(.+)-(kis|qa|trake)\.txt$", re.IGNORECASE)
+EVENT_PATTERN = re.compile(r"^\s*E\d+\s*:", re.IGNORECASE | re.MULTILINE)
+TIMED_PATH_PREFIXES = (
+    "/search",
+    "/temporal-search",
+    "/translate-query",
+    "/thumbnail/",
+    "/keyframe/",
+    "/keyframe-webp/",
+    "/video/",
+    "/videos/",
+    "/hls/",
+    "/health",
+)
+
+
+def empty_team_state() -> Dict[str, Any]:
+    return {
+        "members": {},
+        "votes": [],
+        "trake_frames": [],
+        "submission_feedback": {},
+        "active_query": "",
+        "submission_counts": {},
+    }
+
+
+def query_sort_key(filename: str) -> List[Tuple[int, Any]]:
+    return [
+        (0, int(part)) if part.isdigit() else (1, part.lower())
+        for part in re.split(r"(\d+)", filename)
+        if part
+    ]
+
+
+def parse_query_filename(filename: str) -> Tuple[str, str]:
+    if Path(filename).name != filename:
+        raise ValueError("ten query khong hop le")
+    match = QUERY_FILENAME_PATTERN.fullmatch(filename)
+    if not match:
+        raise ValueError("query phai co dang query-...-(kis|qa|trake).txt")
+    return filename[len("query-"):-len(".txt")], match.group(2).lower()
+
+
+def csv_row_count(path: Path) -> int:
+    if not path.is_file():
+        return 0
+    with path.open("r", encoding="utf-8", newline="") as file_obj:
+        return sum(1 for row in csv.reader(file_obj) if row)
+
+
+def load_query_catalog(
+    query_root: Path = QUERY_ROOT,
+    submission_root: Path = CSV_SUBMISSION_ROOT,
+) -> List[Dict[str, Any]]:
+    if not query_root.is_dir():
+        return []
+    queries = []
+    for path in sorted(query_root.iterdir(), key=lambda item: query_sort_key(item.name)):
+        if not path.is_file():
+            continue
+        try:
+            label, task_type = parse_query_filename(path.name)
+        except ValueError:
+            continue
+        output_path = submission_root / f"{path.stem}.csv"
+        queries.append({
+            "filename": path.name,
+            "label": label,
+            "task_type": task_type,
+            "content": path.read_text(encoding="utf-8"),
+            "answer_count": csv_row_count(output_path),
+            "output_filename": output_path.name,
+        })
+    return queries
+
+
+def build_csv_submission_row(
+    query_path: Path,
+    task_type: str,
+    items: List[Dict[str, Any]],
+    answer: Any = "",
+) -> List[Any]:
+    if not isinstance(items, list) or not items:
+        raise ValueError("can it nhat mot frame")
+
+    normalized = []
+    for item in items:
+        if not isinstance(item, dict):
+            raise ValueError("frame khong hop le")
+        video_id = str(item.get("video_id", "")).strip()
+        if not video_id or video_id.lower().endswith(".mp4") or "," in video_id:
+            raise ValueError("video_id khong hop le")
+        raw_frame_id = item.get("frame_id", item.get("frame_idx"))
+        try:
+            frame_id = int(raw_frame_id)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("frame_id phai la so nguyen") from exc
+        if frame_id < 0:
+            raise ValueError("frame_id khong duoc am")
+        normalized.append((video_id, frame_id))
+
+    if task_type == "kis":
+        if len(normalized) != 1:
+            raise ValueError("KIS moi dong chi nhan mot frame")
+        return [normalized[0][0], normalized[0][1]]
+
+    if task_type == "qa":
+        if len(normalized) != 1:
+            raise ValueError("QA moi dong chi nhan mot frame")
+        answer_text = str(answer)
+        if not answer_text.strip() or len(answer_text) > 100:
+            raise ValueError("answer QA phai co tu 1 den 100 ky tu")
+        return [normalized[0][0], normalized[0][1], answer_text]
+
+    if task_type == "trake":
+        video_id = normalized[0][0]
+        if any(item_video_id != video_id for item_video_id, _ in normalized):
+            raise ValueError("TRAKE chi nhan cac frame thuoc cung mot video")
+        event_count = len(EVENT_PATTERN.findall(query_path.read_text(encoding="utf-8")))
+        if event_count and len(normalized) != event_count:
+            raise ValueError(f"TRAKE can dung {event_count} frame theo so event trong query")
+        return [video_id, *[frame_id for _, frame_id in normalized]]
+
+    raise ValueError("loai query khong hop le")
+
+
+def load_frontend_metadata(
+    records_path: Path,
+    deleted_rows: set[int],
+    deleted_keyframe_ids: set[str],
+) -> Tuple[Dict[str, str], Dict[str, List[Dict[str, Any]]], Dict[str, List[Dict[str, Any]]]]:
+    video_path_by_id: Dict[str, str] = {}
+    representatives: Dict[str, Dict[int, Tuple[float, Dict[str, Any]]]] = {}
+    frames_by_video: Dict[str, List[Dict[str, Any]]] = {}
+
+    if not records_path.exists():
+        sqlite_candidate = records_path.with_name("records.sqlite")
+        if sqlite_candidate.exists():
+            records_path = sqlite_candidate
+
+    if records_path.suffix.lower() in {".sqlite", ".db"}:
+        import sqlite3
+        conn = sqlite3.connect(f"file:{records_path.resolve()}?mode=ro", uri=True)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.execute(
+            "SELECT row_id, keyframe_id, video_id, shot_id, frame_idx, timestamp_ms, image_file, shot_start_ms, shot_end_ms FROM records"
+        )
+        for row in cursor:
+            video_id = str(row["video_id"]).strip()
+            keyframe_id = str(row["keyframe_id"]).strip()
+            if not video_id or not keyframe_id:
+                continue
+            source_row = int(row["row_id"])
+            if source_row in deleted_rows or keyframe_id in deleted_keyframe_ids:
+                continue
+            shot_id = int(row["shot_id"]) if row["shot_id"] is not None else 0
+            timestamp_ms = int(row["timestamp_ms"] or 0)
+            shot_start_ms = timestamp_ms if row["shot_start_ms"] is None else int(row["shot_start_ms"])
+            shot_end_ms = timestamp_ms if row["shot_end_ms"] is None else int(row["shot_end_ms"])
+            midpoint_ms = (shot_start_ms + shot_end_ms) / 2.0
+            distance = abs(timestamp_ms - midpoint_ms)
+            frame = {
+                "keyframe_id": keyframe_id,
+                "video_id": video_id,
+                "shot_id": shot_id,
+                "timestamp_ms": timestamp_ms,
+                "timestamp_seconds": round(timestamp_ms / 1000.0, 3),
+                "frame_id": int(row["frame_idx"] or 0),
+                "source_embedding_row": source_row,
+            }
+            frames_by_video.setdefault(video_id, []).append(frame)
+            shots = representatives.setdefault(video_id, {})
+            current = shots.get(shot_id)
+            if current is None or distance < current[0]:
+                shots[shot_id] = (distance, frame)
+        conn.close()
+    else:
+        with records_path.open("r", encoding="utf-8") as file_obj:
+            for line in file_obj:
+                if not line.strip():
+                    continue
+                row = json.loads(line)
+                video_id = str(row.get("video_id", "")).strip()
+                video_path = str(row.get("video_path", "")).strip()
+                if video_id and video_path:
+                    video_path_by_id.setdefault(video_id, video_path)
+
+                keyframe_id = str(row.get("keyframe_id", "")).strip()
+                if not video_id or not keyframe_id:
+                    continue
+                try:
+                    source_row = int(row.get("source_embedding_row", row.get("row", -1)))
+                except (TypeError, ValueError):
+                    continue
+                if source_row in deleted_rows or keyframe_id in deleted_keyframe_ids:
+                    continue
+                try:
+                    shot_id = int(row["shot_id"])
+                    timestamp_ms = int(row.get("timestamp_ms", row.get("time_ms", 0)) or 0)
+                    raw_start_ms = row.get("shot_start_ms")
+                    raw_end_ms = row.get("shot_end_ms")
+                    shot_start_ms = timestamp_ms if raw_start_ms is None else int(raw_start_ms)
+                    shot_end_ms = timestamp_ms if raw_end_ms is None else int(raw_end_ms)
+                except (KeyError, TypeError, ValueError):
+                    continue
+
+                midpoint_ms = (shot_start_ms + shot_end_ms) / 2.0
+                distance = abs(timestamp_ms - midpoint_ms)
+                frame = {
+                    "keyframe_id": keyframe_id,
+                    "video_id": video_id,
+                    "shot_id": shot_id,
+                    "timestamp_ms": timestamp_ms,
+                    "timestamp_seconds": round(timestamp_ms / 1000.0, 3),
+                    "frame_id": int(row.get("frame_idx", 0) or 0),
+                    "source_embedding_row": source_row,
+                }
+                frames_by_video.setdefault(video_id, []).append(frame)
+                shots = representatives.setdefault(video_id, {})
+                current = shots.get(shot_id)
+                if current is None or distance < current[0]:
+                    shots[shot_id] = (distance, frame)
+
+    shot_frames_by_video = {
+        video_id: [
+            item[1]
+            for _, item in sorted(
+                shots.items(),
+                key=lambda pair: (pair[1][1]["timestamp_ms"], pair[0]),
+            )
+        ]
+        for video_id, shots in representatives.items()
+    }
+    for frames in frames_by_video.values():
+        frames.sort(key=lambda item: (item["timestamp_ms"], item["source_embedding_row"]))
+    return video_path_by_id, shot_frames_by_video, frames_by_video
+
+
+def select_frame_context(
+    frames: List[Dict[str, Any]],
+    timestamp_ms: int,
+    *,
+    count: int = 48,
+) -> List[Dict[str, Any]]:
+    if not frames or count < 1 or count > 96:
+        return []
+    center_index = min(
+        range(len(frames)),
+        key=lambda index: abs(int(frames[index]["timestamp_ms"]) - timestamp_ms),
+    )
+    selected_size = min(count, len(frames))
+    start = max(0, min(center_index - count // 2, len(frames) - selected_size))
+    selected = [dict(frame) for frame in frames[start:start + selected_size]]
+    selected[center_index - start]["is_current"] = True
+    return selected
+
+
+def select_shot_context(
+    frames: List[Dict[str, Any]],
+    shot_id: int,
+    *,
+    keyframe_id: str = "",
+    timestamp_ms: Optional[int] = None,
+    window_size: int = 24,
+    shots_before: int = 11,
+) -> List[Dict[str, Any]]:
+    center_index = next(
+        (index for index, frame in enumerate(frames) if int(frame["shot_id"]) == shot_id),
+        -1,
+    )
+    if center_index < 0:
+        return []
+
+    selected_size = min(window_size, len(frames))
+    start = max(0, min(center_index - shots_before, len(frames) - selected_size))
+    selected = [dict(frame) for frame in frames[start:start + selected_size]]
+    center = selected[center_index - start]
+    if keyframe_id:
+        center["keyframe_id"] = keyframe_id
+    if timestamp_ms is not None:
+        center["timestamp_ms"] = timestamp_ms
+        center["timestamp_seconds"] = round(timestamp_ms / 1000.0, 3)
+    center["is_candidate"] = True
+    return selected
+
+
+def load_deleted_frames(manifest_path: Path) -> tuple[set[int], set[str]]:
+    rows: set[int] = set()
+    keyframe_ids: set[str] = set()
+    if not manifest_path.is_file():
+        return rows, keyframe_ids
+    with manifest_path.open("r", encoding="utf-8") as file_obj:
+        for line in file_obj:
+            if not line.strip():
+                continue
+            item = json.loads(line)
+            rows.add(int(item["row"]))
+            keyframe_ids.add(f"{item['video_id']}_{Path(item['image_file']).stem}")
+    return rows, keyframe_ids
+
+
+def read_team_state(path: Path = TEAM_STATE_PATH) -> Dict[str, Any]:
+    if not path.exists():
+        return empty_team_state()
+    try:
+        with path.open("r", encoding="utf-8") as file_obj:
+            state = json.load(file_obj)
+    except Exception:  # noqa: BLE001
+        return empty_team_state()
+    if not isinstance(state, dict):
+        return empty_team_state()
+    state.setdefault("members", {})
+    state.setdefault("votes", [])
+    state.setdefault("trake_frames", [])
+    state.setdefault("submission_feedback", {})
+    state.setdefault("active_query", "")
+    state.setdefault("submission_counts", {})
+    for vote in state["votes"]:
+        if not vote.get("selection_id"):
+            item = vote.get("item", {})
+            vote["selection_id"] = f"vote:{vote.get('client_id', '')}:{item.get('keyframe_id', '')}"
+    for frame in state["trake_frames"]:
+        if not frame.get("selection_id"):
+            item = frame.get("item", {})
+            frame["selection_id"] = f"trake:{item.get('video_id', '')}:{item.get('keyframe_id', '')}"
+    return state
+
+
+def write_team_state(state: Dict[str, Any], path: Path = TEAM_STATE_PATH) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_suffix(".tmp")
+    with tmp_path.open("w", encoding="utf-8") as file_obj:
+        json.dump(state, file_obj, ensure_ascii=False, indent=2)
+    tmp_path.replace(path)
+
+
+class TeamSocketHub:
+    def __init__(self) -> None:
+        self._clients: set[WebSocket] = set()
+
+    async def connect(self, websocket: WebSocket) -> None:
+        await websocket.accept()
+        self._clients.add(websocket)
+
+    def disconnect(self, websocket: WebSocket) -> None:
+        self._clients.discard(websocket)
+
+    async def broadcast(self, state: Dict[str, Any]) -> None:
+        stale_clients = []
+        for websocket in list(self._clients):
+            try:
+                await websocket.send_json(state)
+            except Exception:  # noqa: BLE001
+                stale_clients.append(websocket)
+        for websocket in stale_clients:
+            self.disconnect(websocket)
+
+
+def validate_dres_server(server_url: str) -> str:
+    server_url = server_url.rstrip("/")
+    if not server_url.startswith(("http://", "https://")):
+        raise ValueError("DRES server phai bat dau bang http:// hoac https://")
+    return server_url
+
+
+def build_dres_submission_payload(body: Dict[str, Any]) -> Dict[str, Any]:
+    task_type = str(body.get("task_type", "")).strip().lower()
+    if task_type == "qa":
+        answer = str(body.get("answer", "")).strip()
+        if not answer or len(answer) > 1000 or any(ord(char) < 32 for char in answer):
+            raise ValueError("answer QA khong hop le")
+        return {
+            "answerSets": [{
+                "answers": [{"text": answer}]
+            }]
+        }
+
+    payload = body.get("payload")
+    if not isinstance(payload, dict):
+        raise ValueError("payload DRES khong hop le")
+    return payload
+
+
+def urllib_request_bytes(req: urllib.request.Request, timeout: int = 30) -> Tuple[int, Dict[str, str], bytes]:
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.status, dict(resp.headers.items()), resp.read()
+    except urllib.error.HTTPError as exc:
+        return exc.code, dict(exc.headers.items()), exc.read()
+
+
+async def forward_urllib_request(req: urllib.request.Request, timeout: int = 30) -> Response:
+    try:
+        loop = asyncio.get_running_loop()
+        status, headers, body = await loop.run_in_executor(None, urllib_request_bytes, req, timeout)
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse({"detail": f"Goi DRES/backend that bai: {exc}"}, status_code=502)
+
+    response_headers = {}
+    for key, value in headers.items():
+        if key.lower() not in {"connection", "transfer-encoding", "content-encoding"}:
+            response_headers[key] = value
+    return Response(
+        content=body,
+        status_code=status,
+        headers=response_headers,
+        media_type=response_headers.get("Content-Type"),
+    )
+
+
+def create_app(
+    backend_url: str,
+    records_path: Path,
+    deleted_manifest: Path = DEFAULT_DELETED_MANIFEST,
+    team_state_path: Path = TEAM_STATE_PATH,
+    team_capture_dir: Path = TEAM_CAPTURE_DIR,
+    query_root: Path = QUERY_ROOT,
+    csv_submission_root: Path = CSV_SUBMISSION_ROOT,
+    hls_server_url: str = os.getenv("HLS_SERVER_URL", "http://127.0.0.1:8052"),
+) -> FastAPI:
+    translator_url = os.getenv("TRANSLATOR_URL", "http://127.0.0.1:8031")
+    video_path_by_id: Dict[str, str] = {}
+    shot_frames_by_video: Dict[str, List[Dict[str, Any]]] = {}
+    frames_by_video: Dict[str, List[Dict[str, Any]]] = {}
+    deleted_rows, deleted_keyframe_ids = load_deleted_frames(deleted_manifest)
+    metadata_ready = threading.Event()
+
+    def load_metadata_background() -> None:
+        try:
+            video_paths, shot_frames, all_frames = load_frontend_metadata(
+                records_path,
+                deleted_rows,
+                deleted_keyframe_ids,
+            )
+            video_path_by_id.update(video_paths)
+            shot_frames_by_video.update(shot_frames)
+            frames_by_video.update(all_frames)
+            shot_count = sum(len(frames) for frames in shot_frames.values())
+            print(
+                f"Shot metadata ready: {len(shot_frames)} videos, {shot_count} shots",
+                flush=True,
+            )
+        except Exception as exc:  # noqa: BLE001
+            print(f"WARNING: khong load duoc video metadata: {exc}", flush=True)
+        finally:
+            metadata_ready.set()
+
+    threading.Thread(target=load_metadata_background, daemon=True).start()
+    team_socket_hub = TeamSocketHub()
+    team_state_lock = asyncio.Lock()
+    app = FastAPI(title="AIC2026 Frontend", default_response_class=JSONResponse)
+
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+    @app.middleware("http")
+    async def log_request_timing(request: Request, call_next):
+        path = request.url.path
+        should_log = path == "/health" or path.startswith(TIMED_PATH_PREFIXES)
+        if not should_log:
+            return await call_next(request)
+
+        started_at = time.perf_counter()
+        try:
+            response = await call_next(request)
+        except Exception as exc:  # noqa: BLE001
+            total_ms = (time.perf_counter() - started_at) * 1000
+            print(
+                f"[frontend-timing] method={request.method} path={path} "
+                f"status=500 total_ms={total_ms:.1f} error={type(exc).__name__}",
+                flush=True,
+            )
+            raise
+
+        total_ms = (time.perf_counter() - started_at) * 1000
+        content_length = response.headers.get("content-length", "-")
+        response.headers["Server-Timing"] = f"frontend;dur={total_ms:.1f}"
+        response.headers["X-Frontend-Time-Ms"] = f"{total_ms:.1f}"
+        print(
+            f"[frontend-timing] method={request.method} path={path} "
+            f"status={response.status_code} total_ms={total_ms:.1f} bytes={content_length}",
+            flush=True,
+        )
+        return response
+
+    async def proxy_backend(request: Request, backend_path: str, timeout: int = 300) -> Response:
+        body = await request.body() if request.method in {"POST", "PUT", "PATCH"} else None
+        headers = {}
+        for key in FORWARDED_HEADERS:
+            value = request.headers.get(key)
+            if value:
+                headers[key] = value
+        target = backend_url.rstrip("/") + backend_path
+        req = urllib.request.Request(target, data=body, headers=headers, method=request.method)
+        return await forward_urllib_request(req, timeout=timeout)
+
+    def get_video_path(video_id: str) -> Path:
+        if not video_id or any(part in video_id for part in ("..", "/", "\\")):
+            raise HTTPException(status_code=400, detail="Invalid video id")
+        video_path = video_path_by_id.get(video_id)
+        if not video_path:
+            raise HTTPException(status_code=404, detail="video_id not found")
+        path = Path(video_path)
+        if not path.exists() or not path.is_file():
+            raise HTTPException(status_code=404, detail=f"video not found: {path}")
+        return path
+
+    def get_hls_path(video_id: str, asset_path: str) -> Path:
+        if not video_id or any(part in video_id for part in ("..", "/", "\\")):
+            raise HTTPException(status_code=400, detail="Invalid video id")
+        if not asset_path or any(part in asset_path for part in ("..", "\\")):
+            raise HTTPException(status_code=400, detail="Invalid HLS path")
+        video_dir = HLS_ROOT / video_id
+        path = video_dir / asset_path
+        try:
+            resolved = path.resolve()
+            resolved.relative_to(video_dir.resolve())
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail="HLS asset not found") from exc
+        if not resolved.is_file():
+            raise HTTPException(status_code=404, detail=f"HLS asset not found: {video_id}/{asset_path}")
+        return resolved
+
+    def hls_media_type(path: Path) -> str:
+        if path.suffix == ".m3u8":
+            return "application/vnd.apple.mpegurl"
+        if path.suffix == ".m4s":
+            return "video/iso.segment"
+        return mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+
+    @app.get("/")
+    async def index():
+        html = (FRONTEND_DIR / "index.html").read_text(encoding="utf-8")
+        return HTMLResponse(
+            content=html,
+            headers={
+                "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+                "Pragma": "no-cache",
+                "Expires": "0",
+            },
+        )
+
+    @app.get("/health")
+    async def health(request: Request):
+        return await proxy_backend(request, "/health")
+
+    @app.post("/search")
+    async def search(request: Request):
+        response = await proxy_backend(request, "/search")
+        if response.status_code != 200 or not deleted_rows:
+            return response
+        try:
+            payload = json.loads(bytes(response.body))
+            results = [
+                item for item in payload.get("results", [])
+                if int(item.get("source_embedding_row", -1)) not in deleted_rows
+            ]
+            for rank, item in enumerate(results, start=1):
+                item["rank"] = rank
+            payload["results"] = results
+            payload["returned"] = len(results)
+            payload["frontend_excluded_rows"] = len(deleted_rows)
+            return JSONResponse(payload, status_code=200)
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"detail": f"Loc frame da xoa that bai: {exc}"}, status_code=502)
+
+    @app.post("/translate-query")
+    async def translate_query(request: Request):
+        body = await request.body()
+        req = urllib.request.Request(
+            translator_url.rstrip("/") + "/translate-query",
+            data=body,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        return await forward_urllib_request(req, timeout=300)
+
+    @app.post("/temporal-search")
+    async def temporal_search(request: Request):
+        return await proxy_backend(request, "/temporal-search")
+
+    @app.get("/shot-context/{video_id}/{shot_id}")
+    async def shot_context(
+        video_id: str,
+        shot_id: int,
+        keyframe_id: str = "",
+        timestamp_ms: Optional[int] = None,
+    ):
+        if not video_id or any(part in video_id for part in ("..", "/", "\\")):
+            raise HTTPException(status_code=400, detail="Invalid video id")
+        if keyframe_id in deleted_keyframe_ids:
+            raise HTTPException(status_code=404, detail="Frame da duoc chuyen sang frames_deleted")
+        if not metadata_ready.is_set():
+            raise HTTPException(status_code=503, detail="Shot metadata is loading")
+        frames = select_shot_context(
+            shot_frames_by_video.get(video_id, []),
+            shot_id,
+            keyframe_id=keyframe_id,
+            timestamp_ms=timestamp_ms,
+        )
+        if not frames:
+            raise HTTPException(status_code=404, detail="Shot metadata not found")
+        return {"frames": frames, "returned": len(frames), "window_size": 24}
+
+    @app.get("/frame-context/{video_id}")
+    async def frame_context(video_id: str, timestamp_ms: int, count: int = 48):
+        if not metadata_ready.is_set():
+            raise HTTPException(status_code=503, detail="Frame metadata is loading")
+        frames = select_frame_context(frames_by_video.get(video_id, []), timestamp_ms, count=count)
+        if not frames:
+            raise HTTPException(status_code=404, detail="Synthetic frame metadata not found")
+        return {"frames": frames, "returned": len(frames), "window_size": count}
+
+    LOCAL_KEYFRAME_ROOTS = [
+        Path(r"D:\AICHALLENGE2026\keyframes_AIC_2026\synthetic_frames\synthetic_frames"),
+        Path(r"D:\AICHALLENGE2026\keyframes_AIC_2026\synthetic_frames"),
+        Path(r"D:\AICHALLENGE2026\keyframes_AIC_2026"),
+        Path(r"D:\keyframes_AIC_2026\synthetic_frames\synthetic_frames"),
+        Path(r"D:\keyframes_AIC_2026\synthetic_frames"),
+        Path(r"D:\keyframes_AIC_2026"),
+    ]
+
+    def resolve_local_keyframe_file(keyframe_id: str) -> Optional[Path]:
+        raw = urllib.parse.unquote(str(keyframe_id)).strip()
+        if not raw:
+            return None
+        stem = Path(raw).stem
+        parts = stem.rsplit("_", 1)
+        if len(parts) == 2:
+            video_id, frame_idx = parts[0], parts[1]
+            try:
+                num = int(frame_idx)
+                names = [f"{num:03d}.jpg", f"{num}.jpg", f"{frame_idx}.jpg", f"{frame_idx}.jpeg"]
+            except ValueError:
+                names = [f"{frame_idx}.jpg", f"{frame_idx}.jpeg"]
+            for root in LOCAL_KEYFRAME_ROOTS:
+                if not root.is_dir():
+                    continue
+                for name in names:
+                    target = root / video_id / name
+                    if target.is_file():
+                        return target
+        for root in LOCAL_KEYFRAME_ROOTS:
+            if not root.is_dir():
+                continue
+            p = root / raw
+            if p.is_file():
+                return p
+            if (root / f"{raw}.jpg").is_file():
+                return root / f"{raw}.jpg"
+        return None
+
+    @app.get("/keyframe/{keyframe_id:path}")
+    async def keyframe(keyframe_id: str, request: Request):
+        if keyframe_id in deleted_keyframe_ids:
+            raise HTTPException(status_code=404, detail="Frame da duoc chuyen sang frames_deleted")
+        local_file = resolve_local_keyframe_file(keyframe_id)
+        if local_file is not None:
+            return FileResponse(
+                local_file,
+                media_type="image/jpeg",
+                headers={"Cache-Control": "public, max-age=31536000, immutable", "X-Keyframe-Source": "local-jpg"},
+            )
+        return await proxy_backend(request, f"/keyframe/{urllib.parse.quote(keyframe_id)}")
+
+    @app.head("/keyframe/{keyframe_id:path}")
+    async def keyframe_head(keyframe_id: str, request: Request):
+        local_file = resolve_local_keyframe_file(keyframe_id)
+        if local_file is not None:
+            return Response(
+                status_code=200,
+                media_type="image/jpeg",
+                headers={"Cache-Control": "public, max-age=31536000, immutable", "X-Keyframe-Source": "local-jpg"},
+            )
+        return await proxy_backend(request, f"/keyframe/{urllib.parse.quote(keyframe_id)}")
+
+    @app.get("/thumbnail/{keyframe_id:path}")
+    async def thumbnail(keyframe_id: str, request: Request):
+        if keyframe_id in deleted_keyframe_ids:
+            raise HTTPException(status_code=404, detail="Frame da duoc chuyen sang frames_deleted")
+        local_file = resolve_local_keyframe_file(keyframe_id)
+        if local_file is not None:
+            return FileResponse(
+                local_file,
+                media_type="image/jpeg",
+                headers={"Cache-Control": "public, max-age=31536000, immutable", "X-Keyframe-Source": "local-jpg"},
+            )
+        return await proxy_backend(request, f"/thumbnail/{urllib.parse.quote(keyframe_id)}")
+
+    @app.head("/thumbnail/{keyframe_id:path}")
+    async def thumbnail_head(keyframe_id: str, request: Request):
+        local_file = resolve_local_keyframe_file(keyframe_id)
+        if local_file is not None:
+            return Response(
+                status_code=200,
+                media_type="image/jpeg",
+                headers={"Cache-Control": "public, max-age=31536000, immutable", "X-Keyframe-Source": "local-jpg"},
+            )
+        return await proxy_backend(request, f"/thumbnail/{urllib.parse.quote(keyframe_id)}")
+
+    @app.get("/keyframe-webp/{keyframe_id:path}")
+    async def keyframe_webp(keyframe_id: str, request: Request):
+        if keyframe_id in deleted_keyframe_ids:
+            raise HTTPException(status_code=404, detail="Frame da duoc chuyen sang frames_deleted")
+        local_file = resolve_local_keyframe_file(keyframe_id)
+        if local_file is not None:
+            return FileResponse(
+                local_file,
+                media_type="image/jpeg",
+                headers={"Cache-Control": "public, max-age=31536000, immutable", "X-Keyframe-Source": "local-jpg"},
+            )
+        return await proxy_backend(request, f"/keyframe-webp/{urllib.parse.quote(keyframe_id)}")
+
+    @app.head("/keyframe-webp/{keyframe_id:path}")
+    async def keyframe_webp_head(keyframe_id: str, request: Request):
+        local_file = resolve_local_keyframe_file(keyframe_id)
+        if local_file is not None:
+            return Response(
+                status_code=200,
+                media_type="image/jpeg",
+                headers={"Cache-Control": "public, max-age=31536000, immutable", "X-Keyframe-Source": "local-jpg"},
+            )
+        return await proxy_backend(request, f"/keyframe-webp/{urllib.parse.quote(keyframe_id)}")
+
+    async def proxy_url(request: Request, target_url: str, timeout: int = 300) -> Response:
+        body = await request.body() if request.method in {"POST", "PUT", "PATCH"} else None
+        headers = {}
+        for key in FORWARDED_HEADERS:
+            value = request.headers.get(key)
+            if value:
+                headers[key] = value
+        req = urllib.request.Request(target_url, data=body, headers=headers, method=request.method)
+        return await forward_urllib_request(req, timeout=timeout)
+
+    @app.get("/hls/{video_id}/{asset_path:path}")
+    async def get_hls_asset(video_id: str, asset_path: str, request: Request):
+        try:
+            path = get_hls_path(video_id, asset_path)
+            return FileResponse(
+                path,
+                media_type=hls_media_type(path),
+                headers={"Cache-Control": "public, max-age=31536000"},
+            )
+        except HTTPException:
+            if hls_server_url:
+                target = hls_server_url.rstrip("/") + f"/hls/{urllib.parse.quote(video_id)}/{asset_path}"
+                return await proxy_url(request, target)
+            raise
+
+    @app.head("/hls/{video_id}/{asset_path:path}")
+    async def head_hls_asset(video_id: str, asset_path: str, request: Request):
+        try:
+            path = get_hls_path(video_id, asset_path)
+            return FileResponse(
+                path,
+                media_type=hls_media_type(path),
+                headers={"Cache-Control": "public, max-age=31536000"},
+            )
+        except HTTPException:
+            if hls_server_url:
+                target = hls_server_url.rstrip("/") + f"/hls/{urllib.parse.quote(video_id)}/{asset_path}"
+                return await proxy_url(request, target)
+            raise
+
+    @app.get("/videos/{video_id}")
+    async def get_video(video_id: str, request: Request):
+        try:
+            path = get_video_path(video_id)
+            media_type = mimetypes.guess_type(path.name)[0] or "video/mp4"
+            return FileResponse(
+                path,
+                media_type=media_type,
+                filename=path.name,
+                headers={"Cache-Control": "public, max-age=31536000"},
+            )
+        except HTTPException:
+            if hls_server_url:
+                target = hls_server_url.rstrip("/") + f"/videos/{urllib.parse.quote(video_id)}"
+                return await proxy_url(request, target)
+            raise
+
+    @app.head("/videos/{video_id}")
+    async def head_video(video_id: str, request: Request):
+        try:
+            path = get_video_path(video_id)
+            media_type = mimetypes.guess_type(path.name)[0] or "video/mp4"
+            return FileResponse(
+                path,
+                media_type=media_type,
+                filename=path.name,
+                headers={"Cache-Control": "public, max-age=31536000"},
+            )
+        except HTTPException:
+            if hls_server_url:
+                target = hls_server_url.rstrip("/") + f"/videos/{urllib.parse.quote(video_id)}"
+                return await proxy_url(request, target)
+            raise
+
+    @app.get("/video/{video_id}")
+    async def get_legacy_video(video_id: str, request: Request):
+        return await get_video(video_id, request)
+
+    @app.head("/video/{video_id}")
+    async def head_legacy_video(video_id: str, request: Request):
+        return await head_video(video_id, request)
+
+    @app.get("/team/state")
+    async def team_state():
+        state = read_team_state(team_state_path)
+        state["submission_counts"] = {
+            query["filename"]: query["answer_count"]
+            for query in load_query_catalog(query_root, csv_submission_root)
+        }
+        return state
+
+    @app.get("/submission/queries")
+    async def submission_queries():
+        return {"queries": load_query_catalog(query_root, csv_submission_root)}
+
+    @app.post("/team/query")
+    async def select_team_query(body: Dict[str, Any]):
+        filename = str(body.get("filename", "")).strip()
+        try:
+            parse_query_filename(filename)
+            query_path = query_root / filename
+            if not query_path.is_file():
+                raise ValueError("query khong ton tai")
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"detail": f"Query khong hop le: {exc}"}, status_code=400)
+
+        async with team_state_lock:
+            state = read_team_state(team_state_path)
+            state["active_query"] = filename
+            state["submission_counts"] = {
+                query["filename"]: query["answer_count"]
+                for query in load_query_catalog(query_root, csv_submission_root)
+            }
+            write_team_state(state, team_state_path)
+        await team_socket_hub.broadcast(state)
+        return state
+
+    @app.post("/submission/csv")
+    async def submit_csv(body: Dict[str, Any]):
+        filename = str(body.get("query_filename", "")).strip()
+        try:
+            _, task_type = parse_query_filename(filename)
+            query_path = query_root / filename
+            if not query_path.is_file():
+                raise ValueError("query khong ton tai")
+            row = build_csv_submission_row(
+                query_path,
+                task_type,
+                body.get("items"),
+                body.get("answer", ""),
+            )
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"detail": f"Bai nop CSV khong hop le: {exc}"}, status_code=400)
+
+        output_path = csv_submission_root / f"{query_path.stem}.csv"
+        async with team_state_lock:
+            csv_submission_root.mkdir(parents=True, exist_ok=True)
+            lock_path = csv_submission_root / ".submission.lock"
+            with lock_path.open("a+") as lock_file:
+                if fcntl is not None:
+                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+                count = csv_row_count(output_path)
+                if count >= 100:
+                    return JSONResponse({"detail": "File CSV da dat gioi han 100 dong"}, status_code=409)
+                with output_path.open("a", encoding="utf-8", newline="") as file_obj:
+                    if task_type == "qa":
+                        escaped_answer = str(row[2]).replace('"', '""')
+                        file_obj.write(f'{row[0]},{row[1]},"{escaped_answer}"\n')
+                    else:
+                        csv.writer(file_obj, lineterminator="\n").writerow(row)
+                count += 1
+                state = read_team_state(team_state_path)
+                state["active_query"] = filename
+                state.setdefault("submission_counts", {})[filename] = count
+                write_team_state(state, team_state_path)
+
+        await team_socket_hub.broadcast(state)
+        return {
+            "query_filename": filename,
+            "output_filename": output_path.name,
+            "answer_count": count,
+            "row": row,
+        }
+
+    @app.get("/correct-submission-sound.mp3")
+    async def correct_submission_sound():
+        sounds = [
+            path
+            for path in SUBMISSION_SOUND_ROOT.iterdir()
+            if path.is_file()
+            and path.stat().st_size > 0
+            and path.suffix.lower() in SUBMISSION_SOUND_SUFFIXES
+        ] if SUBMISSION_SOUND_ROOT.is_dir() else []
+        if not sounds:
+            raise HTTPException(status_code=404, detail="Submission sound not found")
+        sound_path = random.choice(sounds)
+        return FileResponse(
+            sound_path,
+            media_type=mimetypes.guess_type(sound_path.name)[0] or "audio/mpeg",
+            headers={"Cache-Control": "no-store"},
+        )
+
+    @app.websocket("/ws/team")
+    async def team_websocket(websocket: WebSocket):
+        await team_socket_hub.connect(websocket)
+        try:
+            state = read_team_state(team_state_path)
+            state["submission_counts"] = {
+                query["filename"]: query["answer_count"]
+                for query in load_query_catalog(query_root, csv_submission_root)
+            }
+            await websocket.send_json(state)
+            while True:
+                await websocket.receive_text()
+        except WebSocketDisconnect:
+            team_socket_hub.disconnect(websocket)
+        except Exception:  # noqa: BLE001
+            team_socket_hub.disconnect(websocket)
+
+    @app.post("/team/member")
+    async def save_team_member(body: Dict[str, Any]):
+        try:
+            client_id = str(body["client_id"]).strip()
+            name = str(body["name"]).strip()
+            if not client_id or not name:
+                raise ValueError("client_id va name khong duoc rong")
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"detail": f"Body member khong hop le: {exc}"}, status_code=400)
+
+        async with team_state_lock:
+            state = read_team_state(team_state_path)
+            state["members"][client_id] = {"name": name, "updated_at": time.time()}
+            write_team_state(state, team_state_path)
+        await team_socket_hub.broadcast(state)
+        return state
+
+    @app.post("/team/submission-feedback")
+    async def broadcast_submission_feedback(body: Dict[str, Any]):
+        verdict = str(body.get("verdict", "")).strip().lower()
+        name = str(body.get("name", "")).strip()[:100]
+        event_id = str(body.get("event_id", "")).strip() or str(uuid.uuid4())
+        keyframe_ids = [
+            str(value).strip()
+            for value in body.get("keyframe_ids", [])
+            if str(value).strip()
+        ][:100]
+        if verdict not in {"correct", "wrong", "clear"} or not name or not keyframe_ids:
+            return JSONResponse({"detail": "Submission feedback khong hop le"}, status_code=400)
+        event = {
+            "type": "submission_feedback",
+            "event_id": event_id,
+            "verdict": verdict,
+            "name": name,
+            "keyframe_ids": keyframe_ids,
+        }
+        async with team_state_lock:
+            state = read_team_state(team_state_path)
+            shared_feedback = state["submission_feedback"]
+            if verdict == "correct":
+                for keyframe_id in [
+                    key for key, value in shared_feedback.items()
+                    if str(value.get("verdict", "")) == "wrong"
+                ]:
+                    shared_feedback.pop(keyframe_id, None)
+            has_correct = any(
+                str(value.get("verdict", "")) == "correct"
+                for value in shared_feedback.values()
+            )
+            for keyframe_id in keyframe_ids:
+                if verdict == "clear":
+                    shared_feedback.pop(keyframe_id, None)
+                elif verdict != "wrong" or not has_correct:
+                    shared_feedback[keyframe_id] = {
+                        "verdict": verdict,
+                        "name": name,
+                        "event_id": event_id,
+                        "updated_at": time.time(),
+                    }
+            if len(shared_feedback) > 1000:
+                newest = sorted(
+                    shared_feedback.items(),
+                    key=lambda item: float(item[1].get("updated_at", 0)),
+                    reverse=True,
+                )[:1000]
+                state["submission_feedback"] = dict(newest)
+            write_team_state(state, team_state_path)
+        await team_socket_hub.broadcast(state)
+        await team_socket_hub.broadcast(event)
+        return event
+
+    @app.post("/team/vote")
+    async def save_team_vote(body: Dict[str, Any]):
+        try:
+            client_id = str(body["client_id"]).strip()
+            name = str(body["name"]).strip()
+            item = body["item"]
+            keyframe_id = str(item["keyframe_id"])
+            if not client_id or not name or not keyframe_id:
+                raise ValueError("client_id, name va keyframe_id khong duoc rong")
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"detail": f"Body vote khong hop le: {exc}"}, status_code=400)
+
+        async with team_state_lock:
+            state = read_team_state(team_state_path)
+            state["members"][client_id] = {"name": name, "updated_at": time.time()}
+            votes = [
+                vote for vote in state.get("votes", [])
+                if not (vote.get("client_id") == client_id and vote.get("item", {}).get("keyframe_id") == keyframe_id)
+            ]
+            votes.append({
+                "selection_id": uuid.uuid4().hex,
+                "client_id": client_id,
+                "name": name,
+                "item": item,
+                "created_at": time.time(),
+            })
+            expired = votes[:-200]
+            state["votes"] = votes[-200:]
+            for vote in expired:
+                delete_capture_for_vote(vote)
+            write_team_state(state, team_state_path)
+        await team_socket_hub.broadcast(state)
+        return state
+
+    @app.post("/team/trake/add")
+    async def add_trake_frame(body: Dict[str, Any]):
+        try:
+            client_id = str(body["client_id"]).strip()
+            name = str(body["name"]).strip()
+            item = body["item"]
+            keyframe_id = str(item["keyframe_id"]).strip()
+            video_id = str(item["video_id"]).strip()
+            frame_id = int(item.get("frame_id", item.get("frame_idx")))
+            if not client_id or not name or not keyframe_id or not video_id or frame_id < 0:
+                raise ValueError("client_id, name, video_id, keyframe_id va frame_id khong hop le")
+            item = dict(item)
+            item["frame_id"] = frame_id
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"detail": f"Body TRAKE frame khong hop le: {exc}"}, status_code=400)
+
+        async with team_state_lock:
+            state = read_team_state(team_state_path)
+            trake_frames = state["trake_frames"]
+            if trake_frames and any(frame.get("item", {}).get("video_id") != video_id for frame in trake_frames):
+                return JSONResponse({"detail": "TRAKE chi nhan cac frame thuoc cung mot video."}, status_code=400)
+            duplicate = any(
+                frame.get("item", {}).get("video_id") == video_id
+                and (
+                    frame.get("item", {}).get("keyframe_id") == keyframe_id
+                    or str(frame.get("item", {}).get("frame_id", "")) == str(frame_id)
+                )
+                for frame in trake_frames
+            )
+            if not duplicate:
+                state["members"][client_id] = {"name": name, "updated_at": time.time()}
+                trake_frames.append({
+                    "selection_id": uuid.uuid4().hex,
+                    "client_id": client_id,
+                    "name": name,
+                    "item": item,
+                    "created_at": time.time(),
+                })
+                state["trake_frames"] = trake_frames[-200:]
+                write_team_state(state, team_state_path)
+        await team_socket_hub.broadcast(state)
+        return state
+
+    @app.post("/team/capture")
+    async def save_team_capture(request: Request):
+        params = request.query_params
+        try:
+            client_id = str(params["client_id"]).strip()
+            name = str(params["name"]).strip()
+            video_id = str(params["video_id"]).strip()
+            frame_id = int(params["frame_id"])
+            timestamp_ms = int(params["timestamp_ms"])
+            fps = float(params["fps"])
+            shot_id = str(params.get("shot_id", "")).strip()
+            target = str(params.get("target", "team")).strip().lower()
+            if not client_id or not name or not video_id or frame_id < 0 or timestamp_ms < 0 or fps <= 0:
+                raise ValueError("tham so capture khong hop le")
+            if target not in {"team", "trake"}:
+                raise ValueError("target capture khong hop le")
+            content_type = request.headers.get("content-type", "").split(";", 1)[0]
+            if content_type not in {"image/jpeg", "image/png", "image/webp"}:
+                raise ValueError("capture phai la JPEG, PNG hoac WebP")
+            image = await request.body()
+            if not image or len(image) > 8 * 1024 * 1024:
+                raise ValueError("capture rong hoac lon hon 8 MB")
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"detail": f"Body capture khong hop le: {exc}"}, status_code=400)
+
+        selection_id = uuid.uuid4().hex
+        suffix = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"}[content_type]
+        team_capture_dir.mkdir(parents=True, exist_ok=True)
+        image_path = team_capture_dir / f"{selection_id}{suffix}"
+        image_path.write_bytes(image)
+        image_url = f"/team-capture/{selection_id}{suffix}"
+        item = {
+            "keyframe_id": f"capture_{selection_id}",
+            "video_id": video_id,
+            "shot_id": shot_id,
+            "frame_id": frame_id,
+            "timestamp_ms": timestamp_ms,
+            "timestamp_seconds": round(timestamp_ms / 1000, 3),
+            "fps": fps,
+            "image_url": image_url,
+            "thumbnail_url": image_url,
+            "is_capture": True,
+        }
+        async with team_state_lock:
+            state = read_team_state(team_state_path)
+            state["members"][client_id] = {"name": name, "updated_at": time.time()}
+            selection = {
+                "selection_id": selection_id,
+                "client_id": client_id,
+                "name": name,
+                "item": item,
+                "created_at": time.time(),
+            }
+            target_frames = state["trake_frames"] if target == "trake" else state["votes"]
+            if target == "trake" and target_frames and any(
+                frame.get("item", {}).get("video_id") != video_id for frame in target_frames
+            ):
+                image_path.unlink(missing_ok=True)
+                return JSONResponse({"detail": "TRAKE chi nhan cac frame thuoc cung mot video."}, status_code=400)
+            if target == "trake" and any(
+                frame.get("item", {}).get("video_id") == video_id
+                and str(frame.get("item", {}).get("frame_id", "")) == str(frame_id)
+                for frame in target_frames
+            ):
+                image_path.unlink(missing_ok=True)
+                return state
+            target_frames.append(selection)
+            expired = target_frames[:-200]
+            if target == "trake":
+                state["trake_frames"] = target_frames[-200:]
+            else:
+                state["votes"] = target_frames[-200:]
+            for vote in expired:
+                delete_capture_for_vote(vote)
+            write_team_state(state, team_state_path)
+        await team_socket_hub.broadcast(state)
+        return state
+
+    @app.get("/team-capture/{filename}")
+    async def get_team_capture(filename: str):
+        if not filename or Path(filename).name != filename or Path(filename).suffix not in {".jpg", ".png", ".webp"}:
+            raise HTTPException(status_code=404, detail="Capture not found")
+        path = team_capture_dir / filename
+        if not path.is_file():
+            raise HTTPException(status_code=404, detail="Capture not found")
+        return FileResponse(path, headers={"Cache-Control": "public, max-age=31536000, immutable"})
+
+    def delete_capture_for_vote(vote: Dict[str, Any]) -> None:
+        item = vote.get("item", {})
+        if not item.get("is_capture"):
+            return
+        filename = Path(str(item.get("image_url", ""))).name
+        if filename and Path(filename).name == filename:
+            (team_capture_dir / filename).unlink(missing_ok=True)
+
+    @app.post("/team/remove")
+    async def remove_team_vote(body: Dict[str, Any]):
+        selection_id = str(body.get("selection_id", "")).strip()
+        if not selection_id:
+            return JSONResponse({"detail": "selection_id khong duoc rong"}, status_code=400)
+        async with team_state_lock:
+            state = read_team_state(team_state_path)
+            removed = [vote for vote in state.get("votes", []) if vote.get("selection_id") == selection_id]
+            state["votes"] = [vote for vote in state.get("votes", []) if vote.get("selection_id") != selection_id]
+            for vote in removed:
+                delete_capture_for_vote(vote)
+            write_team_state(state, team_state_path)
+        await team_socket_hub.broadcast(state)
+        return state
+
+    @app.post("/team/trake/remove")
+    async def remove_trake_frame(body: Dict[str, Any]):
+        selection_id = str(body.get("selection_id", "")).strip()
+        if not selection_id:
+            return JSONResponse({"detail": "selection_id khong duoc rong"}, status_code=400)
+        async with team_state_lock:
+            state = read_team_state(team_state_path)
+            removed = [
+                frame for frame in state["trake_frames"]
+                if frame.get("selection_id") == selection_id
+            ]
+            state["trake_frames"] = [
+                frame for frame in state["trake_frames"]
+                if frame.get("selection_id") != selection_id
+            ]
+            for frame in removed:
+                delete_capture_for_vote(frame)
+            write_team_state(state, team_state_path)
+        await team_socket_hub.broadcast(state)
+        return state
+
+    @app.post("/team/trake/clear")
+    async def clear_trake_frames():
+        async with team_state_lock:
+            state = read_team_state(team_state_path)
+            removed = state["trake_frames"]
+            state["trake_frames"] = []
+            for frame in removed:
+                delete_capture_for_vote(frame)
+            write_team_state(state, team_state_path)
+        await team_socket_hub.broadcast(state)
+        return state
+
+    @app.post("/team/clear")
+    async def clear_team_votes(body: Dict[str, Any]):
+        try:
+            client_id = str(body["client_id"]).strip()
+            if not client_id:
+                raise ValueError("client_id khong duoc rong")
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"detail": f"Body clear vote khong hop le: {exc}"}, status_code=400)
+
+        async with team_state_lock:
+            state = read_team_state(team_state_path)
+            removed = [vote for vote in state.get("votes", []) if vote.get("client_id") == client_id]
+            state["votes"] = [vote for vote in state.get("votes", []) if vote.get("client_id") != client_id]
+            for vote in removed:
+                delete_capture_for_vote(vote)
+            write_team_state(state, team_state_path)
+        await team_socket_hub.broadcast(state)
+        return state
+
+    @app.post("/dres/login")
+    async def login_dres(body: Dict[str, Any]):
+        try:
+            server_url = validate_dres_server(str(body["server_url"]))
+            username = str(body["username"])
+            password = str(body["password"])
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"detail": f"Body login DRES khong hop le: {exc}"}, status_code=400)
+
+        data = json.dumps({"username": username, "password": password}).encode("utf-8")
+        req = urllib.request.Request(
+            f"{server_url}/api/v2/login",
+            data=data,
+            headers={"Content-Type": "application/json", "Accept": "application/json"},
+            method="POST",
+        )
+        return await forward_urllib_request(req, timeout=30)
+
+    @app.post("/dres/evaluations")
+    async def list_dres_evaluations(body: Dict[str, Any]):
+        try:
+            server_url = validate_dres_server(str(body["server_url"]))
+            session_id = str(body["session_id"])
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"detail": f"Body evaluation DRES khong hop le: {exc}"}, status_code=400)
+
+        query = urllib.parse.urlencode({"session": session_id})
+        req = urllib.request.Request(
+            f"{server_url}/api/v2/client/evaluation/list?{query}",
+            headers={"Accept": "application/json"},
+            method="GET",
+        )
+        return await forward_urllib_request(req, timeout=30)
+
+    @app.post("/dres/submit")
+    async def submit_dres(body: Dict[str, Any]):
+        try:
+            server_url = validate_dres_server(str(body["server_url"]))
+            session_id = str(body["session_id"]).strip()
+            evaluation_id = str(body["evaluation_id"]).strip()
+            if not session_id or not evaluation_id:
+                raise ValueError("session_id va evaluation_id khong duoc rong")
+            payload = build_dres_submission_payload(body)
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"detail": f"Body submit DRES khong hop le: {exc}"}, status_code=400)
+
+        query = urllib.parse.urlencode({"session": session_id})
+        target = f"{server_url}/api/v2/submit/{urllib.parse.quote(evaluation_id)}?{query}"
+        data = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(
+            target,
+            data=data,
+            headers={"Content-Type": "application/json", "Accept": "application/json"},
+            method="POST",
+        )
+        return await forward_urllib_request(req, timeout=30)
+
+    @app.api_route("/{asset_path:path}", methods=["GET", "HEAD"])
+    async def static_asset(asset_path: str, request: Request):
+        if not asset_path:
+            raise HTTPException(status_code=404, detail="Not found")
+        path = FRONTEND_DIR / asset_path
+        try:
+            resolved = path.resolve()
+            resolved.relative_to(FRONTEND_DIR)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail="Not found") from exc
+        if not resolved.is_file():
+            raise HTTPException(status_code=404, detail="Not found")
+        content = resolved.read_bytes()
+        media_type = mimetypes.guess_type(resolved.name)[0] or "application/octet-stream"
+        headers = {
+            "Content-Length": str(len(content)),
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+            "Expires": "0",
+        }
+        return Response(
+            content=b"" if request.method == "HEAD" else content,
+            media_type=media_type,
+            headers=headers,
+        )
+
+    app.state.video_path_by_id = video_path_by_id
+    app.state.shot_frames_by_video = shot_frames_by_video
+    app.state.metadata_ready = metadata_ready
+    app.state.records_path = records_path
+    app.state.backend_url = backend_url
+    app.state.deleted_rows = deleted_rows
+    app.state.deleted_keyframe_ids = deleted_keyframe_ids
+    app.state.team_state_path = team_state_path
+    app.state.team_capture_dir = team_capture_dir
+    return app
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Chay frontend FastAPI va media endpoint truc tiep.")
+    parser.add_argument("--host", default="127.0.0.1")
+    parser.add_argument("--port", type=int, default=8080)
+    parser.add_argument("--backend-url", default="http://127.0.0.1:8036")
+    parser.add_argument("--hls-server-url", default=os.getenv("HLS_SERVER_URL", "http://127.0.0.1:8052"))
+    parser.add_argument("--records-path", type=Path, default=DEFAULT_RECORDS_PATH)
+    parser.add_argument("--deleted-manifest", type=Path, default=DEFAULT_DELETED_MANIFEST)
+    parser.add_argument("--query-root", type=Path, default=QUERY_ROOT)
+    return parser.parse_args()
+
+
+def main() -> int:
+    args = parse_args()
+    app = create_app(
+        backend_url=args.backend_url,
+        records_path=args.records_path,
+        deleted_manifest=args.deleted_manifest,
+        query_root=args.query_root,
+        hls_server_url=args.hls_server_url,
+    )
+    print(f"Frontend FastAPI: http://{args.host}:{args.port}/")
+    print(f"Proxy backend: {args.backend_url}")
+    print(f"Remote HLS server: {args.hls_server_url}")
+    print(f"Video records: {args.records_path} (metadata preload runs in background)")
+    print(f"Deleted frame filter: {args.deleted_manifest} ({len(app.state.deleted_rows)} rows)")
+    uvicorn.run(app, host=args.host, port=args.port, log_level="info")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
