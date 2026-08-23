@@ -1,5 +1,5 @@
 const state = {
-  searchMode: 'single',
+  searchMode: 'temporal',
   embeddingModel: 'metaclip',
   ocrModel: 'monkey',
   queryMode: 'text',
@@ -8,7 +8,7 @@ const state = {
   similarityTextWeight: 30,
   asrWeight: 20,
   asrOnly: false,
-  stages: [{id: 1, name: 'Query 1', query: '', translatedQuery: '', ocrQuery: '', asrQuery: '', ocrWeight: 41, asrWeight: 20}],
+  stages: [{id: 1, name: 'Hành động A', query: '', translatedQuery: '', ocrQuery: '', asrQuery: '', ocrWeight: 41, asrWeight: 20}],
   temporalSessionId: null,
   temporalStage: 0,
   results: [],
@@ -60,7 +60,6 @@ const els = {
   videoActiveQueryContent: document.getElementById('videoActiveQueryContent'),
   submissionModeToggle: document.getElementById('submissionModeToggle'),
   stageList: document.getElementById('stageList'),
-  searchBtn: document.getElementById('searchBtn'),
   videoFilter: document.getElementById('videoFilter'),
   clearBtn: document.getElementById('clearBtn'),
   resetBtn: document.getElementById('resetBtn'),
@@ -69,19 +68,10 @@ const els = {
   results: document.getElementById('results'),
   resultCount: document.getElementById('resultCount'),
   searchMeta: document.getElementById('searchMeta'),
-  searchModeToggle: document.getElementById('searchModeToggle'),
   embeddingModelToggle: document.getElementById('embeddingModelToggle'),
   temporalActions: document.getElementById('temporalActions'),
   addStageBtn: document.getElementById('addStageBtn'),
   resetTemporalBtn: document.getElementById('resetTemporalBtn'),
-  ocrQuery: document.getElementById('ocrQuery'),
-  ocrModel: document.getElementById('ocrModel'),
-  ocrWeight: document.getElementById('ocrWeight'),
-  ocrWeightValue: document.getElementById('ocrWeightValue'),
-  asrWeight: document.getElementById('asrWeight'),
-  asrWeightValue: document.getElementById('asrWeightValue'),
-  asrOnly: document.getElementById('asrOnly'),
-  asrQuery: document.getElementById('asrQuery'),
   searchTimingBtn: document.getElementById('searchTimingBtn'),
   selectedFrames: document.getElementById('selectedFrames'),
   selectionTray: document.getElementById('selectionTray'),
@@ -592,93 +582,60 @@ function syncSingleQuerySource(card) {
 }
 
 function renderStages() {
-  const fusionControl = els.ocrWeight.closest('.fusion-control');
-  if (fusionControl) fusionControl.hidden = state.queryMode === 'similarity' || state.searchMode === 'temporal';
   els.stageList.innerHTML = '';
   state.stages.forEach((stage, index) => {
     const stageNumber = index + 1;
-    const isTemporal = state.searchMode === 'temporal';
-    const isMulti = state.searchMode === 'multi';
-    const isCompletedTemporalStage = isTemporal && index < state.temporalStage;
-    const stageOcrPercent = normalizeOcrPercent(stage.ocrWeight, els.ocrWeight.value);
-    const stageAsrPercent = normalizeAsrPercent(stage.asrWeight, els.asrWeight.value);
+    const isCompletedTemporalStage = index < state.temporalStage;
+    const stageOcrPercent = normalizeOcrPercent(stage.ocrWeight, 41);
+    const stageAsrPercent = normalizeAsrPercent(stage.asrWeight, 20);
     const card = document.createElement('section');
-    card.className = `stage-card${!isTemporal ? ' single-query-stage' : ''}`;
+    card.className = 'stage-card';
     card.dataset.stageId = stage.id;
     card.innerHTML = `
       <div class="stage-head${isCompletedTemporalStage ? ' is-collapsible' : ''}" ${isCompletedTemporalStage ? `role="button" tabindex="0" aria-expanded="${stage.temporalExpanded === true}" title="Bấm để ${stage.temporalExpanded === true ? 'thu gọn' : 'chỉnh sửa'} Query ${stageLetter(index)}"` : ''}>
-        <div><span class="badge">${stageNumber}</span> <strong>${isTemporal ? `Hành động ${stageLetter(index)}` : 'Truy vấn'}</strong>${isCompletedTemporalStage ? ' <span class="badge">Đã tìm</span>' : ''}</div>
+        <div><span class="badge">${stageNumber}</span> <strong>Hành động ${stageLetter(index)}</strong>${isCompletedTemporalStage ? ' <span class="badge">Đã tìm</span>' : ''}</div>
+        ${state.stages.length > 1 ? `<button class="stage-remove" type="button" title="Xóa Query ${stageLetter(index)}" aria-label="Xóa Query ${stageLetter(index)}">${trashIcon()}</button>` : ''}
       </div>
-      <div class="stage-fields">
-        ${isTemporal
-          ? `<label class="text-query-field"><span class="query-field-heading"><b class="query-field-badge" aria-hidden="true">${textQueryIcon()}</b>Text Query ${stageLetter(index)}</span><textarea class="text-query" placeholder="Mô tả hành động ${stageLetter(index)}"></textarea><button class="translate-query-btn" type="button" data-translate-query title="Dịch ô query này sang tiếng Anh">Dịch sang English</button><div class="translated-query-row" ${stage.translatedQuery ? '' : 'hidden'}><strong>English:</strong> <span class="translated-query-text"></span></div></label>
-            <section class="fusion-control stage-query-fusion" ${isCompletedTemporalStage && stage.temporalExpanded !== true ? 'hidden' : ''}>
-              <label><span class="query-field-heading"><b class="query-field-badge is-ocr" aria-hidden="true">${ocrQueryIcon()}</b>OCR Query</span><input class="stage-ocr-query" type="text" placeholder="Nhập chữ xuất hiện trong frame..." autocomplete="off" /></label>
-              <output class="stage-ocr-weight-value" hidden>${stageOcrPercent}%</output>
-              <input class="stage-ocr-weight" type="range" min="0" max="100" value="${stageOcrPercent}" step="1" aria-label="Độ chú trọng OCR Query ${stageNumber}" />
-              <label><span class="query-field-heading"><b class="query-field-badge" aria-hidden="true">A</b>ASR Query</span><input class="stage-asr-query" type="text" placeholder="Nhập lời nói cần tìm trong transcript..." autocomplete="off" /></label>
-              <output class="stage-asr-weight-value" hidden>${stageAsrPercent}%</output>
-              <input class="stage-asr-weight" type="range" min="0" max="100" value="${stageAsrPercent}" step="1" aria-label="Độ chú trọng ASR Query ${stageNumber}" />
-              <small class="fusion-weight-summary"></small>
-            </section>
-            <button class="translate-query-btn" type="button" data-temporal-search-stage="${index}" ${index > state.temporalStage ? 'disabled' : ''}>${isCompletedTemporalStage ? `Tìm lại Query ${stageLetter(index)}` : `Tìm Query ${stageLetter(index)}`}</button>`
-          : `<section class="single-query-source ${state.queryMode === 'text' ? 'is-active' : ''}" data-query-source="text">
-              <div class="query-stage-head"><b class="badge">${stageNumber}</b>${state.stages.length > 1 ? `<button class="stage-remove" type="button" title="Xóa query ${stageNumber}" aria-label="Xóa query ${stageNumber}">${trashIcon()}</button>` : ''}</div>
-              <label><span class="query-field-heading"><b class="query-field-badge" aria-hidden="true">${textQueryIcon()}</b>Text Query</span>
-                <textarea class="text-query" placeholder="Mô tả cảnh cần tìm"></textarea>
-                <button class="translate-query-btn" type="button" data-translate-query title="Dịch ô query này sang tiếng Anh">Dịch sang English</button>
-                <div class="translated-query-row" ${stage.translatedQuery ? '' : 'hidden'}><strong>English:</strong> <span class="translated-query-text"></span></div>
-              </label>
-              ${index === 0 ? '' : `<section class="fusion-control stage-query-fusion">
-                <label><span class="query-field-heading"><b class="query-field-badge is-ocr" aria-hidden="true">${ocrQueryIcon()}</b>OCR Query</span>
-                  <input class="stage-ocr-query" type="text" placeholder="Nhập chữ xuất hiện trong frame..." autocomplete="off" />
-                </label>
-                <output class="stage-ocr-weight-value" hidden>${stageOcrPercent}%</output>
-                <input class="stage-ocr-weight" type="range" min="0" max="100" value="${stageOcrPercent}" step="1" aria-label="Độ chú trọng vào text OCR Query ${stageNumber}" aria-valuetext="Text OCR ${stageOcrPercent}%" />
-                <label><span class="query-field-heading"><b class="query-field-badge" aria-hidden="true">A</b>ASR Query</span>
-                  <input class="stage-asr-query" type="text" placeholder="Nhập lời nói cần tìm trong transcript..." autocomplete="off" />
-                </label>
-                <output class="stage-asr-weight-value" hidden>${stageAsrPercent}%</output>
-                <input class="stage-asr-weight" type="range" min="0" max="100" value="${stageAsrPercent}" step="1" aria-label="Độ chú trọng vào lời nói ASR Query ${stageNumber}" aria-valuetext="ASR ${stageAsrPercent}%" />
-                <small class="fusion-weight-summary"></small>
-              </section>`}
-              <div class="query-add-slot"></div>
-            </section>
-            ${index === state.stages.length - 1 ? `<section class="single-query-source ${state.queryMode === 'similarity' ? 'is-active' : ''}" data-query-source="similarity">
-              <div class="similarity-dropzone ${state.similarityItem ? 'has-image' : ''}" tabindex="0" role="button" aria-label="Kéo frame kết quả vào đây">
-              ${state.similarityItem ? `
-                <img src="/thumbnail/${encodeURIComponent(state.similarityItem.keyframe_id)}" alt="Frame nguồn similarity" />
-                <button class="similarity-clear" type="button" title="Bỏ frame nguồn" aria-label="Bỏ frame nguồn">&times;</button>`
-                : '<strong>Đặt ảnh vào</strong>'}
-              </div>
-              ${state.similarityItem ? `
-              <label class="similarity-query-field">Mô tả điều muốn thay đổi
-                <textarea class="similarity-query" placeholder="Ví dụ: cùng một chiếc xe nhưng vào buổi tối"></textarea>
-              </label>
-              <label class="similarity-weight-control">
-                <span>Điều hướng bằng mô tả <output class="similarity-weight-value">${state.similarityTextWeight}%</output></span>
-                <input class="similarity-weight" type="range" min="0" max="100" value="${state.similarityTextWeight}" step="1" aria-label="Tỷ trọng mô tả văn bản" />
-                <small>Ảnh ${100 - state.similarityTextWeight}% · Mô tả ${state.similarityTextWeight}%</small>
-              </label>` : ''}
-            </section>` : ''}`}
+      <div class="stage-fields" ${isCompletedTemporalStage && stage.temporalExpanded !== true ? 'hidden' : ''}>
+        <label class="text-query-field">
+          <span class="query-field-heading"><b class="query-field-icon" aria-hidden="true">${stageLetter(index)}</b>Text Query</span>
+          <textarea class="text-query" placeholder="Mô tả hành động ${stageLetter(index)}..."></textarea>
+        </label>
+
+        <label class="ocr-query-field">
+          <span class="query-field-heading"><b class="query-field-icon" aria-hidden="true">${ocrQueryIcon()}</b>OCR Query</span>
+          <input class="stage-ocr-query" type="text" placeholder="Nhập chữ xuất hiện trong frame..." autocomplete="off" />
+        </label>
+        <output class="stage-ocr-weight-value" hidden>${stageOcrPercent}%</output>
+        <input class="stage-ocr-weight" type="range" min="0" max="100" value="${stageOcrPercent}" step="1" aria-label="Độ chú trọng OCR Query ${stageNumber}" />
+        
+        <label class="asr-query-field">
+          <span class="query-field-heading"><b class="query-field-icon" aria-hidden="true"><i data-lucide="mic"></i></b>ASR Query</span>
+          <input class="stage-asr-query" type="text" placeholder="Nhập lời nói cần tìm trong transcript..." autocomplete="off" />
+        </label>
+        <output class="stage-asr-weight-value" hidden>${stageAsrPercent}%</output>
+        <input class="stage-asr-weight" type="range" min="0" max="100" value="${stageAsrPercent}" step="1" aria-label="Độ chú trọng ASR Query ${stageNumber}" />
+
+        <small class="fusion-weight-summary"></small>
+
+        ${isCompletedTemporalStage ? `<button class="translate-query-btn" type="button" data-temporal-search-stage="${index}">Tìm lại Query ${stageLetter(index)}</button>` : ''}
       </div>`;
+
     const textarea = card.querySelector('.text-query');
     if (textarea) {
       textarea.value = stage.query || '';
       textarea.addEventListener('input', () => {
         stage.query = textarea.value;
-        stage.translatedQuery = '';
-        const translatedRow = card.querySelector('.translated-query-row');
-        if (translatedRow) translatedRow.hidden = true;
-        if (!isTemporal && index === 0) syncFusionWeights();
-        if (!isTemporal && !isMulti && textarea.value.trim()) {
-          state.queryMode = 'text';
-          syncSingleQuerySource(card);
+        updateStageFusionSummary();
+      });
+      textarea.addEventListener('keydown', event => {
+        if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
+          event.preventDefault();
+          performSearch();
         }
       });
     }
-    const translatedText = card.querySelector('.translated-query-text');
-    if (translatedText) translatedText.textContent = stage.translatedQuery || '';
+
     if (isCompletedTemporalStage) {
       const stageHead = card.querySelector('.stage-head');
       const toggleCompletedStage = () => {
@@ -698,67 +655,41 @@ function renderStages() {
         }
       });
     }
-    const dropzone = card.querySelector('.similarity-dropzone');
-    if (dropzone) {
-      dropzone.addEventListener('dragover', event => {
-        event.preventDefault();
-        dropzone.classList.add('is-dragover');
-      });
-      dropzone.addEventListener('dragleave', () => dropzone.classList.remove('is-dragover'));
-      dropzone.addEventListener('drop', event => {
-        event.preventDefault();
-        dropzone.classList.remove('is-dragover');
-        try {
-          setSimilarityItem(JSON.parse(event.dataTransfer.getData('application/x-aic-keyframe')));
-        } catch {
-          showError('Frame kéo vào không hợp lệ.');
-        }
-      });
-      dropzone.querySelector('.similarity-clear')?.addEventListener('click', event => {
-        event.stopPropagation();
-        state.similarityItem = null;
-        state.queryMode = 'text';
-        renderStages();
-      });
-    }
-    const similarityQuery = card.querySelector('.similarity-query');
-    if (similarityQuery) {
-      similarityQuery.value = state.similarityQuery;
-      similarityQuery.addEventListener('input', () => {
-        state.similarityQuery = similarityQuery.value;
-      });
-    }
-    const similarityWeight = card.querySelector('.similarity-weight');
-    const similarityWeightValue = card.querySelector('.similarity-weight-value');
-    if (similarityWeight && similarityWeightValue) {
-      similarityWeight.addEventListener('input', () => {
-        state.similarityTextWeight = Math.round(Number(similarityWeight.value));
-        similarityWeightValue.textContent = `${state.similarityTextWeight}%`;
-        similarityWeight.closest('label').querySelector('small').textContent =
-          `Ảnh ${100 - state.similarityTextWeight}% · Mô tả ${state.similarityTextWeight}%`;
-      });
-    }
+
     const stageOcrInput = card.querySelector('.stage-ocr-weight');
     const stageAsrInput = card.querySelector('.stage-asr-weight');
     const stageOcrQuery = card.querySelector('.stage-ocr-query');
     const stageAsrQuery = card.querySelector('.stage-asr-query');
+
     const updateStageFusionSummary = () => {
       const summary = card.querySelector('.fusion-weight-summary');
       if (!summary) return;
+      if (state.asrOnly) {
+        summary.innerHTML = '<span>Hình ảnh 0%</span><span>Text OCR 0%</span><span>ASR 100%</span>';
+        return;
+      }
       const weights = fusionWeightsForStage(stage, {
-        hasSemantic: Boolean(stage.query.trim()),
-        hasOcr: Boolean(stage.ocrQuery.trim()),
-        hasAsr: Boolean(stage.asrQuery.trim())
+        hasSemantic: Boolean(String(stage.query || '').trim()),
+        hasOcr: Boolean(String(stage.ocrQuery || '').trim()),
+        hasAsr: Boolean(String(stage.asrQuery || '').trim())
       });
       summary.innerHTML = `<span>Hình ảnh ${Math.round(weights.metaclip_weight * 100)}%</span><span>Text OCR ${Math.round(weights.ocr_weight * 100)}%</span><span>ASR ${Math.round(weights.asr_weight * 100)}%</span>`;
     };
+
     if (stageOcrQuery) {
       stageOcrQuery.value = stage.ocrQuery || '';
       stageOcrQuery.addEventListener('input', () => {
         stage.ocrQuery = stageOcrQuery.value;
         updateStageFusionSummary();
       });
+      stageOcrQuery.addEventListener('keydown', event => {
+        if (event.key === 'Enter' && !event.isComposing) {
+          event.preventDefault();
+          performSearch();
+        }
+      });
     }
+
     if (stageAsrQuery) {
       stageAsrQuery.value = stage.asrQuery || '';
       stageAsrQuery.disabled = state.backend?.asr_available !== true;
@@ -767,11 +698,29 @@ function renderStages() {
         stage.asrQuery = stageAsrQuery.value;
         updateStageFusionSummary();
       });
+      stageAsrQuery.addEventListener('keydown', event => {
+        if (event.key === 'Enter' && !event.isComposing) {
+          event.preventDefault();
+          performSearch();
+        }
+      });
     }
+
     if (stageOcrInput) {
       stage.ocrWeight = stageOcrPercent;
       stageOcrInput.addEventListener('input', () => {
-        const percent = normalizeOcrPercent(stageOcrInput.value, stageOcrPercent);
+        let percent = normalizeOcrPercent(stageOcrInput.value, stageOcrPercent);
+        let asr = normalizeAsrPercent(stageAsrInput?.value, stageAsrPercent);
+        if (percent + asr > 100) {
+          asr = 100 - percent;
+          if (stageAsrInput) {
+            stageAsrInput.value = asr;
+            stage.asrWeight = asr;
+            stageAsrInput.setAttribute('aria-valuetext', `ASR ${asr}%`);
+            const output = card.querySelector('.stage-asr-weight-value');
+            if (output) output.textContent = `${asr}%`;
+          }
+        }
         stage.ocrWeight = percent;
         stageOcrInput.setAttribute('aria-valuetext', `Text OCR ${percent}%`);
         const output = card.querySelector('.stage-ocr-weight-value');
@@ -780,12 +729,24 @@ function renderStages() {
         state.fusionWeightsTouched = true;
       });
     }
+
     if (stageAsrInput) {
       stage.asrWeight = stageAsrPercent;
       stageAsrInput.disabled = state.backend?.asr_available !== true;
-      stageAsrInput.title = stageAsrInput.disabled ? 'Backend ASR chưa sẵn sàng' : '';
+      stageAsrInput.title = state.backend?.asr_available !== true ? 'Backend ASR chưa sẵn sàng' : '';
       stageAsrInput.addEventListener('input', () => {
-        const percent = normalizeAsrPercent(stageAsrInput.value, stageAsrPercent);
+        let percent = normalizeAsrPercent(stageAsrInput.value, stageAsrPercent);
+        let ocr = normalizeOcrPercent(stageOcrInput?.value, stageOcrPercent);
+        if (percent + ocr > 100) {
+          ocr = 100 - percent;
+          if (stageOcrInput) {
+            stageOcrInput.value = ocr;
+            stage.ocrWeight = ocr;
+            stageOcrInput.setAttribute('aria-valuetext', `Text OCR ${ocr}%`);
+            const output = card.querySelector('.stage-ocr-weight-value');
+            if (output) output.textContent = `${ocr}%`;
+          }
+        }
         stage.asrWeight = percent;
         stageAsrInput.setAttribute('aria-valuetext', `ASR ${percent}%`);
         const output = card.querySelector('.stage-asr-weight-value');
@@ -794,34 +755,13 @@ function renderStages() {
         state.fusionWeightsTouched = true;
       });
     }
+
     updateStageFusionSummary();
     card.querySelector('.stage-remove')?.addEventListener('click', () => removeStage(stage.id));
     card.querySelector('[data-temporal-search-stage]')?.addEventListener('click', () => performSearch(index));
-    if (!isTemporal && index === 0 && fusionControl) {
-      els.ocrQuery.value = stage.ocrQuery || '';
-      els.asrQuery.value = stage.asrQuery || '';
-      els.ocrWeight.value = String(stageOcrPercent);
-      els.asrWeight.value = String(stageAsrPercent);
-      syncFusionWeights();
-      const textSource = card.querySelector('[data-query-source="text"]');
-      const addSlot = card.querySelector('.query-add-slot');
-      if (textSource && addSlot) textSource.insertBefore(fusionControl, addSlot);
-      else card.querySelector('.stage-fields').appendChild(fusionControl);
-    }
-    if (!isTemporal && index === state.stages.length - 1 && state.stages.length < 5) {
-      const addButton = document.createElement('button');
-      addButton.className = 'query-add-button';
-      addButton.type = 'button';
-      addButton.title = 'Thêm query';
-      addButton.setAttribute('aria-label', 'Thêm query');
-      addButton.textContent = '+';
-      addButton.addEventListener('click', addTemporalStage);
-      card.querySelector('.query-add-slot')?.appendChild(addButton);
-    }
+
     els.stageList.appendChild(card);
   });
-  const similaritySource = els.stageList.querySelector('[data-query-source="similarity"]');
-  if (similaritySource) els.stageList.prepend(similaritySource);
 }
 
 function setQueryMode(mode) {
@@ -856,38 +796,55 @@ function invalidateTemporalResults() {
 
 function addTemporalStage() {
   if (state.stages.length >= 5) return;
-  const nextNumber = state.stages.length + 1;
-  if (state.searchMode !== 'temporal') {
-    state.searchMode = 'multi';
-    state.queryMode = 'text';
-    state.similarityItem = null;
-  }
+  
+  const textFields = document.querySelectorAll('.text-query');
+  const ocrFields = document.querySelectorAll('.stage-ocr-query');
+  const asrFields = document.querySelectorAll('.stage-asr-query');
+  const currentStageIndex = state.stages.length - 1;
+  
+  const hasContent = textFields[currentStageIndex]?.value?.trim() 
+    || ocrFields[currentStageIndex]?.value?.trim() 
+    || asrFields[currentStageIndex]?.value?.trim();
+
+  // Luôn tạo trước stage mới để hệ thống biết đang ở chế độ temporal (cần > 1 stage)
+  const nextIndex = state.stages.length;
+  state.searchMode = 'temporal';
+  state.queryMode = 'text';
+  state.similarityItem = null;
   state.stages.push({
-    id: `${Date.now()}-${nextNumber}`,
-    name: state.searchMode === 'temporal' ? `Hành động ${nextNumber}` : `Query ${nextNumber}`,
+    id: `${Date.now()}-${nextIndex}`,
+    name: `Hành động ${stageLetter(nextIndex)}`,
     query: '',
     translatedQuery: '',
     ocrQuery: '',
     asrQuery: '',
     ocrWeight: normalizeOcrPercent(
       state.stages[state.stages.length - 1]?.ocrWeight,
-      els.ocrWeight.value
+      41
     ),
     asrWeight: normalizeAsrPercent(
       state.stages[state.stages.length - 1]?.asrWeight,
-      els.asrWeight.value
+      20
     )
   });
+
+  // Render UI ngay lập tức để người dùng thấy Tab B được thêm vào
   invalidateTemporalResults();
   renderStages();
   syncSearchModeControls();
   els.stageList.querySelector('.stage-card:last-child .text-query')?.focus();
+
+  // Nếu người dùng đang ở một stage chưa search và có nhập liệu, tự động search stage vừa điền
+  if (currentStageIndex === state.temporalStage && hasContent) {
+    // Gọi search cho stage trước đó. 
+    performSearch(state.temporalStage);
+  }
 }
 
 function removeStage(stageId) {
   if (state.stages.length <= 1) return;
   state.stages = state.stages.filter(stage => stage.id !== stageId);
-  if (state.stages.length === 1 && state.searchMode !== 'temporal') state.searchMode = 'single';
+  state.searchMode = 'temporal';
   invalidateTemporalResults();
   renderStages();
   syncSearchModeControls();
@@ -899,19 +856,11 @@ function collectQueries() {
 }
 
 function collectOcrQueries() {
-  return state.stages.map((stage, index) =>
-    (state.searchMode === 'temporal'
-      ? stage.ocrQuery || ''
-      : index === 0 ? els.ocrQuery.value : stage.ocrQuery || '').trim()
-  );
+  return state.stages.map(stage => String(stage.ocrQuery || '').trim());
 }
 
 function collectAsrQueries() {
-  return state.stages.map((stage, index) =>
-    (state.searchMode === 'temporal'
-      ? stage.asrQuery || ''
-      : index === 0 ? els.asrQuery.value : stage.asrQuery || '').trim()
-  );
+  return state.stages.map(stage => String(stage.asrQuery || '').trim());
 }
 
 function collectQuery() {
@@ -919,76 +868,26 @@ function collectQuery() {
 }
 
 function setSearchMode(mode) {
-  if (!['single', 'multi', 'temporal'].includes(mode) || state.searchMode === mode) return;
-  const currentQueries = collectQueries();
-  const currentOcrQueries = collectOcrQueries();
-  const currentAsrQueries = collectAsrQueries();
-  const currentStageWeights = state.stages.map(stage => stage.ocrWeight);
-  const currentStageAsrWeights = state.stages.map(stage => stage.asrWeight);
-  if (mode === 'single' && currentStageWeights[0] !== undefined) {
-    els.ocrWeight.value = String(normalizeOcrPercent(currentStageWeights[0], els.ocrWeight.value));
-    syncFusionWeights();
-  }
-  state.searchMode = mode;
-  state.temporalSessionId = null;
-  state.temporalStage = 0;
-  if (mode !== 'single') state.queryMode = 'text';
-  const stageCount = mode === 'temporal' ? 1 : mode === 'multi' ? 2 : 1;
-  state.stages = Array.from({length: stageCount}, (_, index) => ({
-    id: `${Date.now()}-${index}`,
-    name: mode === 'temporal' ? `Hành động ${index + 1}` : `Cảnh ${index + 1}`,
-    query: currentQueries[index] || (index === 0 ? currentQueries[0] || '' : ''),
-    translatedQuery: '',
-    ocrQuery: currentOcrQueries[index] || '',
-    asrQuery: currentAsrQueries[index] || '',
-    ocrWeight: mode === 'temporal'
-      ? normalizeOcrPercent(currentStageWeights[index], els.ocrWeight.value)
-      : normalizeOcrPercent(currentStageWeights[index], els.ocrWeight.value),
-    asrWeight: normalizeAsrPercent(currentStageAsrWeights[index], els.asrWeight.value)
-  }));
-  state.results = [];
-  resetSearchTiming();
-  renderStages();
+  state.searchMode = 'temporal';
   syncSearchModeControls();
-  syncEmbeddingModelControls();
-  renderResults();
-  els.searchMeta.textContent = 'Chưa tìm kiếm';
-  showError('');
 }
 
 function syncSearchModeControls() {
-  const temporal = state.searchMode === 'temporal';
-  els.searchModeToggle.textContent = temporal ? 'Quay lại tìm kiếm thường' : 'Temporal A→B→C';
-  els.searchModeToggle.classList.toggle('is-active', temporal);
-  els.searchModeToggle.setAttribute('aria-label', temporal ? 'Quay lại tìm kiếm thường' : 'Bật tìm kiếm temporal A đến B đến C');
-  els.searchModeToggle.title = temporal ? 'Kết thúc phiên temporal và quay lại tìm kiếm thường' : 'Tìm lần lượt Query A, sau đó B, rồi C';
-  els.temporalActions.hidden = !temporal;
-  els.resetTemporalBtn.disabled = !temporal || !state.temporalSessionId;
-  els.addStageBtn.disabled = state.stages.length >= 5;
-  if (temporal) {
-    els.searchBtn.textContent = state.temporalStage >= 3
-      ? 'Đã hoàn thành A→B→C'
-      : `Tìm Query ${stageLetter(state.temporalStage)}`;
-    els.searchBtn.disabled = state.temporalStage >= 3;
-  } else {
-    els.searchBtn.textContent = 'Tìm kiếm';
-    els.searchBtn.disabled = false;
-  }
+  if (els.searchModeToggle) els.searchModeToggle.hidden = true;
+  if (els.temporalActions) els.temporalActions.hidden = false;
+  if (els.resetTemporalBtn) els.resetTemporalBtn.disabled = !state.temporalSessionId && state.stages.length <= 1;
+  if (els.addStageBtn) els.addStageBtn.disabled = state.stages.length >= 5;
 }
 
 function syncEmbeddingModelControls() {
-  const button = els.embeddingModelToggle;
-  const nextModel = state.embeddingModel === 'metaclip' ? 'beit3' : 'metaclip';
-  const nextHealth = state.backend?.embedding_models?.[nextModel];
-  button.textContent = state.embeddingModel === 'beit3' ? 'BEiT-3' : 'MetaCLIP-2';
-  button.disabled = nextModel === 'beit3' && nextHealth?.available !== true;
-  button.title = nextHealth?.error || (button.disabled
-    ? 'BEiT-3 chưa sẵn sàng trên backend'
-    : `Bấm để đổi sang ${nextModel === 'beit3' ? 'BEiT-3' : 'MetaCLIP-2'}`);
-  button.setAttribute(
-    'aria-label',
-    `Mô hình hiện tại ${button.textContent}; ${button.title}`
-  );
+  const isBeit3 = state.embeddingModel === 'beit3';
+  if (els.embeddingModelToggle) {
+    els.embeddingModelToggle.dataset.model = state.embeddingModel;
+    els.embeddingModelToggle.title = isBeit3
+      ? 'Đang dùng BEiT-3. Bấm để đổi sang MetaCLIP-2.'
+      : 'Đang dùng MetaCLIP-2. Bấm để đổi sang BEiT-3.';
+    els.embeddingModelToggle.setAttribute('aria-label', `Mô hình embedding ${isBeit3 ? 'BEiT-3' : 'MetaCLIP-2'}`);
+  }
 }
 
 async function refreshHealth() {
@@ -1000,42 +899,23 @@ async function refreshHealth() {
       state.embeddingModel = 'metaclip';
     }
     const ocrModels = health.ocr_models || {};
-    for (const option of els.ocrModel.options) {
-      const model = ocrModels[option.value];
-      if (!model) {
-        option.disabled = option.value !== 'ppocr';
-        continue;
-      }
-      option.disabled = model.available !== true;
-      const coverage = Number(model.coverage_ratio || 0);
-      option.textContent = option.value === 'monkey'
-        ? `MonkeyOCRv2 · ${Number(model.records || 0).toLocaleString('vi-VN')} frame (${(coverage * 100).toFixed(1)}%)`
-        : `PP-OCRv6 · full (${Number(model.records || 0).toLocaleString('vi-VN')} frame)`;
-    }
     if (state.ocrModel !== 'ppocr' && ocrModels[state.ocrModel]?.available !== true) {
       state.ocrModel = 'ppocr';
     }
-    els.ocrModel.value = state.ocrModel;
     const defaults = health.default_fusion_weights;
     if (!state.fusionWeightsTouched && defaults && Number(defaults.metaclip) + Number(defaults.ocr) > 0) {
       const ocrPercent = Math.round(
         Number(defaults.ocr) / (Number(defaults.metaclip) + Number(defaults.ocr)) * 100
       );
-      els.ocrWeight.value = String(Math.min(100, Math.max(0, ocrPercent)));
       if (state.stages[0]) state.stages[0].ocrWeight = ocrPercent;
-      if (state.searchMode === 'temporal') {
-        state.stages.forEach(stage => {
-          stage.ocrWeight = ocrPercent;
-        });
-        renderStages();
-      }
+      state.stages.forEach(stage => {
+        stage.ocrWeight = ocrPercent;
+      });
       if (Number(defaults.asr) > 0) {
         state.asrWeight = normalizeAsrPercent(Number(defaults.asr) * 100);
-        els.asrWeight.value = String(state.asrWeight);
         if (state.stages[0]) state.stages[0].asrWeight = state.asrWeight;
       }
     }
-    syncFusionWeights();
     renderStages();
     syncEmbeddingModelControls();
     setStatus('Đã kết nối', 'ok');
@@ -1051,76 +931,35 @@ function sortResults(results) {
 }
 
 function syncFusionWeights() {
-  const ocrPercent = normalizeOcrPercent(els.ocrWeight.value);
-  const asrAvailable = state.backend?.asr_available === true;
-  const asrOnly = asrAvailable && Boolean(els.asrOnly.checked);
-  const asrPercent = asrAvailable ? normalizeAsrPercent(els.asrWeight.value, state.asrWeight) : 0;
-  state.asrWeight = asrPercent || normalizeAsrPercent(els.asrWeight.value);
-  state.asrOnly = asrOnly;
-  els.ocrWeightValue.textContent = `${ocrPercent}%`;
-  els.ocrWeight.setAttribute('aria-valuetext', `Text OCR ${ocrPercent}%`);
-  els.asrWeightValue.textContent = `${asrOnly ? 100 : asrPercent}%`;
-  els.asrWeight.setAttribute('aria-valuetext', `ASR ${asrOnly ? 100 : asrPercent}%`);
-  els.asrOnly.disabled = !asrAvailable;
-  els.asrOnly.title = asrAvailable ? 'Chỉ tìm trong transcript ASR' : 'Backend ASR chưa sẵn sàng';
-  els.asrWeight.disabled = !asrAvailable || asrOnly;
-  els.asrQuery.disabled = !asrAvailable;
-  els.ocrWeight.disabled = asrOnly;
-  els.ocrQuery.disabled = asrOnly;
-  const fusionControl = els.ocrWeight.closest('.fusion-control');
-  fusionControl?.classList.toggle('is-asr-only', asrOnly);
-  const summary = els.ocrWeight.closest('.fusion-control')?.querySelector('.fusion-weight-summary');
-  if (summary) {
-    if (asrOnly) {
-      summary.innerHTML = '<span>Hình ảnh 0%</span><span>Text OCR 0%</span><span>ASR 100%</span>';
-    } else {
-      const stage = state.stages[0] || {};
-      const weights = fusionWeightsForStage(stage, {
-        hasSemantic: Boolean(String(stage.query || '').trim()),
-        hasOcr: Boolean(els.ocrQuery.value.trim()),
-        hasAsr: Boolean(els.asrQuery.value.trim())
-      });
-      summary.innerHTML = `<span>Hình ảnh ${Math.round(weights.metaclip_weight * 100)}%</span><span>Text OCR ${Math.round(weights.ocr_weight * 100)}%</span><span>ASR ${Math.round(weights.asr_weight * 100)}%</span>`;
-    }
-  }
-}
-
-function currentFusionWeights({hasSemantic = true, hasOcr = true} = {}) {
-  if (!hasSemantic && !hasOcr) return {metaclip_weight: 0, ocr_weight: 0};
-  if (!hasSemantic) return {metaclip_weight: 0, ocr_weight: 1};
-  if (!hasOcr) return {metaclip_weight: 1, ocr_weight: 0};
-  const ocrWeight = normalizeOcrPercent(els.ocrWeight.value) / 100;
-  return {metaclip_weight: 1 - ocrWeight, ocr_weight: ocrWeight};
-}
-
-function withAsrFusion(weights, {hasAsrQuery = false, asrPercent = state.asrWeight} = {}) {
-  const useAsr = hasAsrQuery && state.backend?.asr_available === true;
-  const baseWeight = Number(weights.metaclip_weight || 0) + Number(weights.ocr_weight || 0);
-  if (useAsr && (state.asrOnly || baseWeight <= 0)) {
-    return {metaclip_weight: 0, ocr_weight: 0, asr_weight: 1};
-  }
-  const asrWeight = useAsr ? normalizeAsrPercent(asrPercent) / 100 : 0;
-  const remaining = 1 - asrWeight;
-  return {
-    metaclip_weight: Number(weights.metaclip_weight || 0) * remaining,
-    ocr_weight: Number(weights.ocr_weight || 0) * remaining,
-    asr_weight: asrWeight
-  };
+  // Fusion weight summary is rendered and synced per stage card in renderStages()
 }
 
 function fusionWeightsForStage(stage, {hasSemantic = true, hasOcr = true, hasAsr = true} = {}) {
-  let baseWeights;
-  if (!hasSemantic && !hasOcr) baseWeights = {metaclip_weight: 0, ocr_weight: 0};
-  else if (!hasSemantic) baseWeights = {metaclip_weight: 0, ocr_weight: 1};
-  else if (!hasOcr) baseWeights = {metaclip_weight: 1, ocr_weight: 0};
-  else {
-    const ocrWeight = normalizeOcrPercent(stage?.ocrWeight, els.ocrWeight.value) / 100;
-    baseWeights = {metaclip_weight: 1 - ocrWeight, ocr_weight: ocrWeight};
+  const ocrPercent = hasOcr ? normalizeOcrPercent(stage?.ocrWeight, 41) : 0;
+  const asrPercent = hasAsr && state.backend?.asr_available === true ? normalizeAsrPercent(stage?.asrWeight, 20) : 0;
+  
+  let ocrWeight = ocrPercent / 100;
+  let asrWeight = asrPercent / 100;
+  let metaclipWeight = 1 - ocrWeight - asrWeight;
+  
+  if (!hasSemantic) {
+    metaclipWeight = 0;
   }
-  return withAsrFusion(baseWeights, {
-    hasAsrQuery: hasAsr,
-    asrPercent: normalizeAsrPercent(stage?.asrWeight, els.asrWeight.value)
-  });
+  
+  const total = metaclipWeight + ocrWeight + asrWeight;
+  if (total <= 0) {
+    return {
+      metaclip_weight: hasSemantic ? 1 : 0,
+      ocr_weight: hasOcr && !hasSemantic ? 1 : 0,
+      asr_weight: hasAsr && !hasSemantic && !hasOcr ? 1 : 0
+    };
+  }
+  
+  return {
+    metaclip_weight: metaclipWeight / total,
+    ocr_weight: ocrWeight / total,
+    asr_weight: asrWeight / total
+  };
 }
 
 function escapeHtml(value) {
@@ -1136,52 +975,7 @@ function collectVideoFilter() {
   return els.videoFilter.value.trim();
 }
 
-async function translateQueryInput(button) {
-  const field = button.closest('.text-query-field, label');
-  const textarea = field?.querySelector('.text-query');
-  const source = textarea?.value.trim() || '';
-  if (!textarea || !source) {
-    setStatus('Nhập query trước khi dịch.', 'error');
-    textarea?.focus();
-    return;
-  }
-  const stageCard = button.closest('.stage-card');
-  const stage = state.stages.find(item => String(item.id) === String(stageCard?.dataset.stageId));
-  button.disabled = true;
-  const originalLabel = button.textContent;
-  button.textContent = 'Đang dịch…';
-  try {
-    const response = await fetch('/translate-query', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({text: source})
-    });
-    const payload = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(payload.detail || `HTTP ${response.status}`);
-    const translation = String(payload.translation || '').trim();
-    if (!translation) throw new Error('Model không trả về bản dịch.');
-    if ((state.searchMode === 'single' || state.searchMode === 'temporal') && state.embeddingModel === 'beit3') {
-      if (stage) stage.translatedQuery = translation;
-      const translatedRow = field.querySelector('.translated-query-row');
-      const translatedText = field.querySelector('.translated-query-text');
-      if (translatedText) translatedText.textContent = translation;
-      if (translatedRow) translatedRow.hidden = false;
-      setStatus('Đã dịch; đang tìm bằng BEiT-3…', 'searching');
-      const stageIndex = state.stages.indexOf(stage);
-      await performSearch(state.searchMode === 'temporal' ? stageIndex : null, translation);
-    } else {
-      textarea.value = translation;
-      if (stage) stage.query = textarea.value;
-      textarea.dispatchEvent(new Event('input', {bubbles: true}));
-      setStatus('Đã dịch query sang tiếng Anh.', 'ok');
-    }
-  } catch (error) {
-    setStatus(`Dịch query thất bại: ${error.message}`, 'error');
-  } finally {
-    button.disabled = false;
-    button.textContent = originalLabel;
-  }
-}
+
 
 function normalizeVideoId(value) {
   return String(value || '').trim().toUpperCase();
@@ -2740,8 +2534,8 @@ async function performSearch(requestedTemporalStageIndex = null, translatedQuery
   const queries = collectQueries();
   const ocrQueries = collectOcrQueries();
   const asrQueries = collectAsrQueries();
-  const temporal = state.searchMode === 'temporal';
-  const multi = !temporal && (state.searchMode === 'multi' || state.stages.length > 1);
+  const temporal = state.stages.length > 1;
+  const multi = !temporal && state.searchMode === 'multi';
   const temporalStageIndex = temporal && Number.isInteger(requestedTemporalStageIndex)
     ? requestedTemporalStageIndex
     : state.temporalStage;
@@ -2785,7 +2579,6 @@ async function performSearch(requestedTemporalStageIndex = null, translatedQuery
     return;
   }
   showError('');
-  els.searchBtn.disabled = true;
   setStatus('Đang tìm', 'searching');
   try {
     await clearCorrectSubmissionFeedback();
@@ -2841,10 +2634,11 @@ async function performSearch(requestedTemporalStageIndex = null, translatedQuery
           search_mode: 'hybrid',
           embedding_model: state.embeddingModel,
           ocr_model: state.ocrModel,
-          ...withAsrFusion(
-            currentFusionWeights({hasSemantic: Boolean(query), hasOcr: Boolean(ocrQuery)}),
-            {hasAsrQuery: Boolean(asrQuery)}
-          )
+          ...fusionWeightsForStage(state.stages[0], {
+            hasSemantic: Boolean(query),
+            hasOcr: Boolean(ocrQuery),
+            hasAsr: Boolean(asrQuery)
+          })
         };
     let payload;
     if (multi) {
@@ -2977,15 +2771,13 @@ async function performSearch(requestedTemporalStageIndex = null, translatedQuery
   } catch (error) {
     showError(error.message || String(error));
     setStatus('Mất kết nối', 'error');
-  } finally {
-    els.searchBtn.disabled = temporal && state.temporalStage >= 3;
   }
 }
 
 function resetWorkspace() {
   const hasData = state.results.length || state.selected.length || collectQuery() || collectVideoFilter();
   if (hasData && !window.confirm('Đặt lại truy vấn, kết quả và các frame đã chọn?')) return;
-  state.searchMode = 'single';
+  state.searchMode = 'temporal';
   state.embeddingModel = 'metaclip';
   state.queryMode = 'text';
   state.similarityItem = null;
@@ -2995,7 +2787,7 @@ function resetWorkspace() {
   state.asrOnly = false;
   state.temporalSessionId = null;
   state.temporalStage = 0;
-  state.stages = [{id: Date.now(), name: 'Query 1', query: '', translatedQuery: '', ocrQuery: '', asrQuery: '', ocrWeight: 41, asrWeight: 20}];
+  state.stages = [{id: Date.now(), name: 'Hành động A', query: '', translatedQuery: '', ocrQuery: '', asrQuery: '', ocrWeight: 41, asrWeight: 20}];
   state.results = [];
   hideCorrectCelebration();
   clearSubmissionFeedback();
@@ -3005,15 +2797,10 @@ function resetWorkspace() {
   state.selected = [];
   resetSearchTiming();
   state.fusionWeightsTouched = false;
-  els.ocrQuery.value = '';
-  els.asrQuery.value = '';
-  els.ocrWeight.value = '41';
-  els.asrWeight.value = '20';
-  els.asrOnly.checked = false;
   renderStages();
   syncSearchModeControls();
   syncEmbeddingModelControls();
-  els.videoFilter.value = '';
+  if (els.videoFilter) els.videoFilter.value = '';
   syncFusionWeights();
   renderResults();
   renderSelection();
@@ -3038,13 +2825,13 @@ async function resetTemporalSearch() {
     }
     state.temporalSessionId = null;
     state.temporalStage = 0;
-    state.stages.forEach(stage => {
-      stage.temporalExpanded = false;
-    });
+    state.stages = state.stages.slice(0, 1);
+    state.stages[0].temporalExpanded = false;
     invalidateTemporalResults();
     renderStages();
     syncSearchModeControls();
-    setStatus('Đã reset temporal; sẵn sàng tìm lại từ Query A.', 'ok');
+    setLog('Đã reset temporal; sẵn sàng tìm lại từ Query A.');
+    setStatus(state.backend ? 'Đã kết nối' : 'Sẵn sàng.', state.backend ? 'ok' : 'neutral');
     els.stageList.querySelector('.stage-card:first-child .text-query')?.focus();
   } catch (error) {
     showError(`Reset temporal thất bại: ${error.message}`);
@@ -3053,7 +2840,7 @@ async function resetTemporalSearch() {
   }
 }
 
-els.searchBtn.addEventListener('click', () => performSearch());
+
 document.addEventListener('pointerdown', unlockCorrectSound, {once: true});
 document.addEventListener('keydown', unlockCorrectSound, {once: true});
 els.embeddingModelToggle.addEventListener('click', async () => {
@@ -3075,15 +2862,10 @@ els.embeddingModelToggle.addEventListener('click', async () => {
     invalidateTemporalResults();
     renderStages();
     syncSearchModeControls();
-    setStatus(`Đã đổi sang ${state.embeddingModel === 'beit3' ? 'BEiT-3' : 'MetaCLIP-2'}; hãy tìm lại từ Query A.`, 'ok');
+    setLog(`Đã đổi sang ${state.embeddingModel === 'beit3' ? 'BEiT-3' : 'MetaCLIP-2'}; hãy tìm lại từ Query A.`);
+    setStatus(state.backend ? 'Đã kết nối' : 'Sẵn sàng.', state.backend ? 'ok' : 'neutral');
   }
   syncEmbeddingModelControls();
-});
-els.ocrModel.addEventListener('change', () => {
-  state.ocrModel = els.ocrModel.value === 'monkey' ? 'monkey' : 'ppocr';
-});
-els.searchModeToggle.addEventListener('click', () => {
-  setSearchMode(state.searchMode === 'temporal' ? 'single' : 'temporal');
 });
 els.addStageBtn.addEventListener('click', addTemporalStage);
 els.resetTemporalBtn.addEventListener('click', resetTemporalSearch);
@@ -3107,45 +2889,6 @@ els.clearBtn.addEventListener('click', () => {
 });
 els.trakeSubmitBtn.addEventListener('click', submitSharedTrakeToDres);
 els.resetBtn.addEventListener('click', resetWorkspace);
-els.ocrWeight.addEventListener('input', () => {
-  state.fusionWeightsTouched = true;
-  if (state.stages[0]) state.stages[0].ocrWeight = normalizeOcrPercent(els.ocrWeight.value);
-  syncFusionWeights();
-});
-els.asrWeight.addEventListener('input', () => {
-  state.fusionWeightsTouched = true;
-  state.asrWeight = normalizeAsrPercent(els.asrWeight.value);
-  if (state.stages[0]) state.stages[0].asrWeight = state.asrWeight;
-  syncFusionWeights();
-});
-els.asrOnly.addEventListener('change', () => {
-  state.fusionWeightsTouched = true;
-  state.asrOnly = Boolean(els.asrOnly.checked);
-  if (state.asrOnly) setQueryMode('text');
-  syncFusionWeights();
-});
-els.asrQuery.addEventListener('input', () => {
-  if (state.stages[0]) state.stages[0].asrQuery = els.asrQuery.value;
-  if (els.asrQuery.value.trim()) setQueryMode('text');
-  syncFusionWeights();
-});
-els.asrQuery.addEventListener('keydown', event => {
-  if (event.key === 'Enter' && !event.isComposing) {
-    event.preventDefault();
-    performSearch();
-  }
-});
-els.ocrQuery.addEventListener('input', () => {
-  if (state.stages[0]) state.stages[0].ocrQuery = els.ocrQuery.value;
-  if (els.ocrQuery.value.trim()) setQueryMode('text');
-  syncFusionWeights();
-});
-els.ocrQuery.addEventListener('keydown', event => {
-  if (event.key === 'Enter' && !event.isComposing) {
-    event.preventDefault();
-    performSearch();
-  }
-});
 els.taskType.addEventListener('change', renderTaskControls);
 els.submissionModeToggle.addEventListener('click', toggleSubmissionMode);
 els.qaSubmitBtn.addEventListener('click', submitQaAnswerToDres);
@@ -3227,12 +2970,6 @@ document.querySelectorAll('.video-speed-option').forEach(btn => {
   });
 });
 document.addEventListener('click', event => {
-  const translateButton = event.target.closest('[data-translate-query]');
-  if (translateButton) {
-    event.preventDefault();
-    translateQueryInput(translateButton);
-    return;
-  }
   if (!els.videoSpeedControl.contains(event.target) && !els.videoVolumeControl.contains(event.target)) {
     closeVideoControlPopovers();
   }

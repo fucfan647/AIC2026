@@ -17,4 +17,5 @@ python -u -m app.lazy_server `
   --backend torch-gpu `
   --device cuda `
   --gpu-dtype float16 `
-  --model-name "facebook/metaclip-2-worldwide-b16-384"
+  --model-name "facebook/metaclip-2-worldwide-b16-384" `
+  --enable-temporal-search

@@ -61,8 +61,9 @@ class TemporalSearchService:
             raise ValueError(f"temporal parameters must be positive: {values}")
         if "metaclip" not in states or "metaclip" not in embedders:
             raise ValueError("temporal search requires MetaCLIP state and embedder")
-        if not hasattr(states["metaclip"].metadata, "records"):
-            raise ValueError("temporal search requires Milvus-preloaded RAM metadata")
+        meta = states["metaclip"].metadata
+        if not hasattr(meta, "records") and not hasattr(meta, "conn"):
+            raise ValueError("temporal search requires metadata records or sqlite connection")
 
         self.states = dict(states)
         self.embedders = dict(embedders)
@@ -82,14 +83,26 @@ class TemporalSearchService:
 
         excluded = {int(value) for value in np.asarray(excluded_indices, dtype=np.int64)}
         grouped: dict[str, list[tuple[int, int]]] = {}
-        for record in states["metaclip"].metadata.records:
-            row_id = int(record["row_id"])
-            timestamp_ms = record.get("timestamp_ms")
-            if row_id in excluded or timestamp_ms is None:
-                continue
-            grouped.setdefault(str(record["video_id"]).upper(), []).append(
-                (int(timestamp_ms), row_id)
-            )
+        if hasattr(meta, "records"):
+            raw_records = meta.records
+            for record in raw_records:
+                row_id = int(record["row_id"])
+                timestamp_ms = record.get("timestamp_ms")
+                if row_id in excluded or timestamp_ms is None:
+                    continue
+                grouped.setdefault(str(record["video_id"]).upper(), []).append(
+                    (int(timestamp_ms), row_id)
+                )
+        else:
+            rows = meta.conn.execute("SELECT row_id, video_id, timestamp_ms FROM records").fetchall()
+            for r in rows:
+                row_id = int(r["row_id"])
+                timestamp_ms = r["timestamp_ms"]
+                if row_id in excluded or timestamp_ms is None:
+                    continue
+                grouped.setdefault(str(r["video_id"]).upper(), []).append(
+                    (int(timestamp_ms), row_id)
+                )
         self.video_timestamps: dict[str, np.ndarray] = {}
         self.video_row_ids: dict[str, np.ndarray] = {}
         for video_id, pairs in grouped.items():
