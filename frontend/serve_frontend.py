@@ -8,6 +8,10 @@ try:
 except ImportError:
     fcntl = None
 import httpx
+try:
+    import websockets
+except ImportError:
+    websockets = None
 import json
 import mimetypes
 import os
@@ -618,7 +622,12 @@ def create_app(
     hls_server_url: str = os.getenv("HLS_SERVER_URL", "http://127.0.0.1:8052"),
     keyframes_dir: Optional[Path] = None,
     thumbnail_root: Optional[Path] = None,
+    team_hub_url: str = "",
 ) -> FastAPI:
+    if not team_hub_url:
+        team_hub_url = os.getenv("TEAM_HUB_URL", "").strip()
+    team_hub_url = team_hub_url.rstrip("/")
+
     translator_url = os.getenv("TRANSLATOR_URL", "http://127.0.0.1:8031")
     video_path_by_id: Dict[str, str] = {}
     shot_frames_by_video: Dict[str, List[Dict[str, Any]]] = {}
@@ -649,6 +658,7 @@ def create_app(
     threading.Thread(target=load_metadata_background, daemon=True).start()
     team_socket_hub = TeamSocketHub()
     team_state_lock = asyncio.Lock()
+    team_hub_client = httpx.AsyncClient(timeout=60.0) if team_hub_url else None
     app = FastAPI(title="AIC2026 Frontend", default_response_class=JSONResponse)
 
     app.add_middleware(
@@ -658,6 +668,52 @@ def create_app(
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    async def proxy_team_hub(request: Request, subpath: str) -> Response:
+        target_url = team_hub_url.rstrip("/") + subpath
+        query_string = request.url.query
+        if query_string:
+            target_url += f"?{query_string}"
+
+        body = await request.body()
+        headers = {}
+        excluded_headers = {"host", "content-length"}
+        for k, v in request.headers.items():
+            if k.lower() not in excluded_headers:
+                headers[k] = v
+
+        try:
+            resp = await team_hub_client.request(
+                method=request.method,
+                url=target_url,
+                content=body,
+                headers=headers,
+            )
+            resp_headers = {}
+            for k, v in resp.headers.items():
+                if k.lower() not in {"transfer-encoding", "content-encoding", "connection"}:
+                    resp_headers[k] = v
+            return Response(
+                content=resp.content,
+                status_code=resp.status_code,
+                headers=resp_headers,
+                media_type=resp.headers.get("content-type"),
+            )
+        except Exception as exc:
+            return JSONResponse({"detail": f"Goi Team Hub that bai ({target_url}): {exc}"}, status_code=502)
+
+    if team_hub_url:
+        @app.middleware("http")
+        async def team_hub_proxy_middleware(request: Request, call_next):
+            path = request.url.path
+            if (
+                path.startswith("/team/")
+                or path.startswith("/team-capture/")
+                or path.startswith("/dres/")
+                or path in {"/submission/queries", "/submission/csv", "/correct-submission-sound.mp3"}
+            ):
+                return await proxy_team_hub(request, path)
+            return await call_next(request)
 
     @app.middleware("http")
     async def log_request_timing(request: Request, call_next):
@@ -963,6 +1019,8 @@ def create_app(
     @app.on_event("shutdown")
     async def shutdown_hls_client():
         await hls_http_client.aclose()
+        if team_hub_client is not None:
+            await team_hub_client.aclose()
 
     async def proxy_stream_url(request: Request, target_url: str) -> Response:
         forward_headers = {}
@@ -1236,6 +1294,56 @@ def create_app(
 
     @app.websocket("/ws/team")
     async def team_websocket(websocket: WebSocket):
+        if team_hub_url:
+            await websocket.accept()
+            hub_ws_url = team_hub_url.rstrip("/")
+            if hub_ws_url.startswith("https://"):
+                hub_ws_url = "wss://" + hub_ws_url[8:] + "/ws/team"
+            elif hub_ws_url.startswith("http://"):
+                hub_ws_url = "ws://" + hub_ws_url[7:] + "/ws/team"
+            else:
+                hub_ws_url = f"ws://{hub_ws_url}/ws/team"
+
+            if websockets is None:
+                await websocket.close(code=1011, reason="websockets library not installed")
+                return
+
+            try:
+                async with websockets.connect(hub_ws_url, ping_interval=20, ping_timeout=20) as upstream_ws:
+                    async def client_to_upstream():
+                        try:
+                            while True:
+                                data = await websocket.receive_text()
+                                await upstream_ws.send(data)
+                        except Exception:
+                            pass
+
+                    async def upstream_to_client():
+                        try:
+                            async for message in upstream_ws:
+                                await websocket.send_text(message)
+                        except Exception:
+                            pass
+
+                    done, pending = await asyncio.wait(
+                        [
+                            asyncio.create_task(client_to_upstream()),
+                            asyncio.create_task(upstream_to_client()),
+                        ],
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    for task in pending:
+                        task.cancel()
+            except WebSocketDisconnect:
+                pass
+            except Exception as exc:
+                print(f"[team-ws-proxy] Upstream Hub error ({hub_ws_url}): {exc}", flush=True)
+                try:
+                    await websocket.close(code=1011, reason=f"Upstream Hub unavailable: {exc}")
+                except Exception:
+                    pass
+            return
+
         await team_socket_hub.connect(websocket)
         try:
             state = read_team_state(team_state_path)
@@ -1817,6 +1925,7 @@ def create_app(
     app.state.deleted_keyframe_ids = deleted_keyframe_ids
     app.state.team_state_path = team_state_path
     app.state.team_capture_dir = team_capture_dir
+    app.state.team_hub_url = team_hub_url
     return app
 
 
@@ -1825,6 +1934,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8080)
     parser.add_argument("--backend-url", default="http://127.0.0.1:8036")
+    parser.add_argument(
+        "--team-hub-url",
+        default=os.getenv("TEAM_HUB_URL", ""),
+        help="URL cua Team Hub (vi du: http://192.168.1.10:8080 hoac http://server_ip:8080). Neu de trong thi tu dong dong vai Master Hub.",
+    )
     parser.add_argument("--hls-server-url", default=os.getenv("HLS_SERVER_URL", "http://127.0.0.1:8052"))
     parser.add_argument("--records-path", type=Path, default=DEFAULT_RECORDS_PATH)
     parser.add_argument("--deleted-manifest", type=Path, default=DEFAULT_DELETED_MANIFEST)
@@ -1857,9 +1971,14 @@ def main() -> int:
         hls_server_url=args.hls_server_url,
         keyframes_dir=args.keyframes_dir,
         thumbnail_root=getattr(args, "thumbnail_root", None),
+        team_hub_url=args.team_hub_url,
     )
     print(f"Frontend FastAPI: http://{args.host}:{args.port}/")
     print(f"Proxy backend: {args.backend_url}")
+    if args.team_hub_url:
+        print(f"Team Hub upstream (Edge Member mode): {args.team_hub_url}")
+    else:
+        print("Team Hub: Master Mode (hosting WebSocket /ws/team & saving submissions locally)")
     print(f"Remote HLS server: {args.hls_server_url}")
     print(f"Video records: {args.records_path} (metadata preload runs in background)")
     print(f"Deleted frame filter: {args.deleted_manifest} ({len(app.state.deleted_rows)} rows)")
