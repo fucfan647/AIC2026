@@ -617,6 +617,7 @@ def create_app(
     csv_submission_root: Path = CSV_SUBMISSION_ROOT,
     hls_server_url: str = os.getenv("HLS_SERVER_URL", "http://127.0.0.1:8052"),
     keyframes_dir: Optional[Path] = None,
+    thumbnail_root: Optional[Path] = None,
 ) -> FastAPI:
     translator_url = os.getenv("TRANSLATOR_URL", "http://127.0.0.1:8031")
     video_path_by_id: Dict[str, str] = {}
@@ -819,6 +820,7 @@ def create_app(
     LOCAL_KEYFRAME_ROOTS: List[Path] = []
     env_keyframes = os.getenv("KEYFRAMES_DIR") or os.getenv("LOCAL_KEYFRAME_DIR")
     candidate_roots = [
+        thumbnail_root,
         keyframes_dir,
         Path(env_keyframes) if env_keyframes else None,
         Path(r"D:\Folder\AICHALLENGE2026\keyframes_AIC_2026"),
@@ -1829,9 +1831,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--query-root", type=Path, default=QUERY_ROOT)
     parser.add_argument(
         "--keyframes-dir",
+        "--keyframe-root",
+        dest="keyframes_dir",
         type=Path,
         default=Path(os.environ["KEYFRAMES_DIR"]) if os.getenv("KEYFRAMES_DIR") else None,
         help="Thu muc chua keyframes tren may local (tu dong fallback sang Backend neu thieu frame)",
+    )
+    parser.add_argument(
+        "--thumbnail-root",
+        dest="thumbnail_root",
+        type=Path,
+        default=None,
+        help="Thu muc chua thumbnails tren may local (neu co)",
     )
     return parser.parse_args()
 
@@ -1845,6 +1856,7 @@ def main() -> int:
         query_root=args.query_root,
         hls_server_url=args.hls_server_url,
         keyframes_dir=args.keyframes_dir,
+        thumbnail_root=getattr(args, "thumbnail_root", None),
     )
     print(f"Frontend FastAPI: http://{args.host}:{args.port}/")
     print(f"Proxy backend: {args.backend_url}")
