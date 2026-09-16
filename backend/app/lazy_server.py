@@ -15,6 +15,12 @@ import numpy as np
 from .config import WEBP_FRAMES_ROOT, WEBP_THUMBNAILS_ROOT
 from .temporal_search import TemporalSearchError, TemporalSearchService
 
+try:
+    import setproctitle
+    setproctitle.setproctitle(os.getenv("PROC_TITLE", "aic_system"))
+except Exception:
+    pass
+
 # Enable ANSI colors on Windows console
 os.system("")
 
@@ -884,11 +890,23 @@ def parse_args():
         action="store_true",
         help="Let Nginx serve validated WebP files through X-Accel-Redirect.",
     )
+    parser.add_argument(
+        "--proctitle",
+        type=str,
+        default=os.getenv("PROC_TITLE", "aic_system"),
+        help="Process title shown in ps/nvitop",
+    )
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
+    if args.proctitle:
+        try:
+            import setproctitle
+            setproctitle.setproctitle(args.proctitle)
+        except Exception:
+            pass
     print("=" * 60, flush=True)
     print("  AIC2026 Backend Runtime (Torch-GPU / CUDA)", flush=True)
     print("=" * 60, flush=True)

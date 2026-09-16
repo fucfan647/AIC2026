@@ -176,10 +176,10 @@ class Beit3Embedder:
                 sys.modules.pop(name, None)
 
         class BEiT3ITCRetrieval(nn.Module):
-            def __init__(self):
+            def __init__(self, img_size: int = 224):
                 super().__init__()
                 model_config = EncoderConfig(
-                    img_size=224,
+                    img_size=img_size,
                     patch_size=16,
                     vocab_size=64010,
                     multiway=True,
@@ -212,13 +212,19 @@ class Beit3Embedder:
         self.max_text_length = config.max_text_length
         self.embedding_dim = config.embedding_dim
         print(f"[embedder] loading BEiT-3 tokenizer: {config.sentencepiece_model}", flush=True)
-        self.tokenizer = XLMRobertaTokenizer(str(config.sentencepiece_model))
+        import sentencepiece as spm
+        self.sp = spm.SentencePieceProcessor(model_file=str(config.sentencepiece_model))
 
         print(f"[embedder] loading BEiT-3 model: {config.checkpoint}", flush=True)
         started = time.time()
-        self.model = BEiT3ITCRetrieval()
         checkpoint = torch.load(config.checkpoint, map_location="cpu", weights_only=False)
         state_dict = checkpoint.get("model", checkpoint)
+        pos_weight = state_dict.get("beit3.encoder.embed_positions.A.weight")
+        detected_img_size = 224
+        if pos_weight is not None and pos_weight.shape[0] == 579:
+            detected_img_size = 384
+            print("[embedder] detected 384x384 checkpoint (COCO/Flickr30k)", flush=True)
+        self.model = BEiT3ITCRetrieval(img_size=detected_img_size)
         self.model.load_state_dict(state_dict, strict=True)
         self.model = self.model.to(config.device)
         self.model.eval()
@@ -230,14 +236,31 @@ class Beit3Embedder:
 
     def encode_text_profiled(self, text: str):
         tokenize_started = time.perf_counter()
-        token_ids = self.tokenizer.convert_tokens_to_ids(self.tokenizer.tokenize(text))
+        pieces = self.sp.encode(text, out_type=str)
+        token_ids = []
+        for piece in pieces:
+            sp_id = self.sp.piece_to_id(piece)
+            if sp_id == 0:
+                token_ids.append(3)
+            elif sp_id == 1:
+                token_ids.append(0)
+            elif sp_id == 2:
+                token_ids.append(2)
+            else:
+                token_ids.append(sp_id + 1)
         token_ids = token_ids[: self.max_text_length - 2]
         if not token_ids:
-            raise ValueError("BEiT-3 query must contain at least one token")
-        token_ids = [self.tokenizer.bos_token_id, *token_ids, self.tokenizer.eos_token_id]
-        padding_size = self.max_text_length - len(token_ids)
-        language_tokens = token_ids + [self.tokenizer.pad_token_id] * padding_size
-        padding_mask = [0] * len(token_ids) + [1] * padding_size
+            token_ids = [3]
+        bos_id = 0
+        eos_id = 2
+        pad_id = 1
+        language_tokens = [bos_id] + token_ids + [eos_id]
+        padding_size = self.max_text_length - len(language_tokens)
+        if padding_size > 0:
+            padding_mask = [0] * len(language_tokens) + [1] * padding_size
+            language_tokens = language_tokens + [pad_id] * padding_size
+        else:
+            padding_mask = [0] * len(language_tokens)
         tokenize_ms = (time.perf_counter() - tokenize_started) * 1000.0
 
         transfer_started = time.perf_counter()

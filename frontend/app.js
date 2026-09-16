@@ -21,12 +21,17 @@ const state = {
   dresServerUrl: 'http://192.168.28.151:5000',
   submissionMode: 'dres',
   queryCatalog: [],
-  activeQueryFilename: '',
+  activeQueryFilename: typeof sessionStorage !== 'undefined' ? (sessionStorage.getItem('aic_active_query_v1') || '') : '',
   lastLog: 'Chưa có log.',
   clientId: '',
   memberName: '',
   teamVotes: [],
   trakeFrames: [],
+  queryViewers: {},
+  userDrafts: {},
+  draftDebounceTimer: null,
+  viewingHeartbeatTimer: null,
+  activeTrayTab: 'chung',
   teamSocket: null,
   teamSocketRetryTimer: null,
   lastSearchTiming: null,
@@ -42,6 +47,7 @@ const state = {
 };
 
 const DRES_CACHE_KEY = 'aic_dres_session_v1';
+const ACTIVE_QUERY_CACHE_KEY = 'aic_active_query_v1';
 const MEMBER_CACHE_KEY = 'aic_team_member_v1';
 const SUBMISSION_MODE_CACHE_KEY = 'aic_submission_mode_v1';
 let activeHls = null;
@@ -54,10 +60,35 @@ function makeClientId() {
 }
 
 const els = {
+  themeToggleBtn: document.getElementById('themeToggleBtn'),
+  memberNameBtn: document.getElementById('memberNameBtn'),
+  memberNameDisplay: document.getElementById('memberNameDisplay'),
+  statsOpenBtn: document.getElementById('statsOpenBtn'),
+  statsModal: document.getElementById('statsModal'),
+  closeStatsBtn: document.getElementById('closeStatsBtn'),
+  statsTabPersonal: document.getElementById('statsTabPersonal'),
+  statsTabTeamHistory: document.getElementById('statsTabTeamHistory'),
+  teamHistorySubCount: document.getElementById('teamHistorySubCount'),
+  statsTeamHistoryView: document.getElementById('statsTeamHistoryView'),
+  teamHistoryList: document.getElementById('teamHistoryList'),
+  statsTabLeaderboard: document.getElementById('statsTabLeaderboard'),
+  statsPersonalView: document.getElementById('statsPersonalView'),
+  statsLeaderboardView: document.getElementById('statsLeaderboardView'),
+  personalStatsList: document.getElementById('personalStatsList'),
+  leaderboardList: document.getElementById('leaderboardList'),
+  personalSubCount: document.getElementById('personalSubCount'),
+  teamSubCount: document.getElementById('teamSubCount'),
   appShell: document.getElementById('appShell'),
   queryStrip: document.getElementById('queryStrip'),
   activeQueryContent: document.getElementById('activeQueryContent'),
   videoActiveQueryContent: document.getElementById('videoActiveQueryContent'),
+  globalSimilarityBtn: document.getElementById('globalSimilarityBtn'),
+  globalSimilarityPopover: document.getElementById('globalSimilarityPopover'),
+  globalSimilarityDropzone: document.getElementById('globalSimilarityDropzone'),
+  globalSimilarityQuery: document.getElementById('globalSimilarityQuery'),
+  globalSimilarityWeight: document.getElementById('globalSimilarityWeight'),
+  globalSimilarityWeightValue: document.getElementById('globalSimilarityWeightValue'),
+  globalSimilarityImageWeightValue: document.getElementById('globalSimilarityImageWeightValue'),
   submissionModeToggle: document.getElementById('submissionModeToggle'),
   stageList: document.getElementById('stageList'),
   videoFilter: document.getElementById('videoFilter'),
@@ -69,15 +100,22 @@ const els = {
   resultCount: document.getElementById('resultCount'),
   searchMeta: document.getElementById('searchMeta'),
   embeddingModelToggle: document.getElementById('embeddingModelToggle'),
-  temporalActions: document.getElementById('temporalActions'),
-  addStageBtn: document.getElementById('addStageBtn'),
-  resetTemporalBtn: document.getElementById('resetTemporalBtn'),
+
   searchTimingBtn: document.getElementById('searchTimingBtn'),
   selectedFrames: document.getElementById('selectedFrames'),
   selectionTray: document.getElementById('selectionTray'),
-  selectionTitle: document.getElementById('selectionTitle'),
+  trayTabChung: document.getElementById('trayTabChung'),
+  trayTabTrake: document.getElementById('trayTabTrake'),
   selectionCount: document.getElementById('selectionCount'),
+  traySubmitBtn: document.getElementById('traySubmitBtn'),
   trakeSubmitBtn: document.getElementById('trakeSubmitBtn'),
+  videoAddTrakeBtn: document.getElementById('videoAddTrakeBtn'),
+  videoTrakeTray: document.getElementById('videoTrakeTray'),
+  videoMainLayout: document.querySelector('.video-main-layout'),
+  videoTrakeCount: document.getElementById('videoTrakeCount'),
+  videoTrakeClearBtn: document.getElementById('videoTrakeClearBtn'),
+  videoTrakeSubmitBtn: document.getElementById('videoTrakeSubmitBtn'),
+  videoTrakeFrames: document.getElementById('videoTrakeFrames'),
   videoShell: document.getElementById('videoShell'),
   player: document.getElementById('player'),
   videoBackBtn: document.getElementById('videoBackBtn'),
@@ -149,7 +187,10 @@ const els = {
   timingBackendTotal: document.getElementById('timingBackendTotal'),
   timingOutsideBackend: document.getElementById('timingOutsideBackend'),
   timingBackendNote: document.getElementById('timingBackendNote'),
-  timingTableBody: document.getElementById('timingTableBody')
+  timingTableBody: document.getElementById('timingTableBody'),
+  shortcutsBtn: document.getElementById('shortcutsBtn'),
+  shortcutsModal: document.getElementById('shortcutsModal'),
+  closeShortcutsBtn: document.getElementById('closeShortcutsBtn')
 };
 
 function stageLetter(index) {
@@ -167,6 +208,12 @@ function showError(message) {
   els.errorBanner.textContent = message || '';
 }
 
+function setDresStatus(text) {
+  if (els.dresStatus) {
+    els.dresStatus.textContent = text || '';
+  }
+}
+
 function activeQuery() {
   return state.queryCatalog.find(query => query.filename === state.activeQueryFilename) || null;
 }
@@ -182,12 +229,17 @@ function renderQueryStrip() {
   state.queryCatalog.forEach(query => {
     const button = document.createElement('button');
     const count = Number(query.answer_count) || 0;
+    const viewers = (state.queryViewers && state.queryViewers[query.filename]) || [];
+    const viewerTags = viewers.length > 0
+      ? `<span class="query-chip-viewers">${viewers.map(name => `<span class="query-chip-viewer">${escapeHtml(name)}</span>`).join('')}</span>`
+      : '';
+    const viewerTooltip = viewers.length > 0 ? ` • Đang xem: ${viewers.join(', ')}` : '';
     button.type = 'button';
-    button.className = `query-chip${count > 0 ? ' has-answers' : ''}${query.filename === state.activeQueryFilename ? ' is-active' : ''}`;
-    button.title = query.filename;
+    button.className = `query-chip${count > 0 ? ' has-answers' : ''}${query.filename === state.activeQueryFilename ? ' is-active' : ''}${viewers.length > 0 ? ' has-viewers' : ''}`;
+    button.title = `${query.filename}${viewerTooltip}`;
     button.dataset.filename = query.filename;
-    button.innerHTML = `<span>${escapeHtml(query.label)}</span><span class="query-chip-count">${count}</span>`;
-    button.addEventListener('click', () => selectSharedQuery(query.filename));
+    button.innerHTML = `<span>${escapeHtml(query.label)}</span><span class="query-chip-count">${count}</span>${viewerTags}`;
+    button.addEventListener('click', () => selectLocalQuery(query.filename));
     els.queryStrip.appendChild(button);
   });
 }
@@ -217,11 +269,12 @@ function renderSubmissionMode() {
   const isCsv = state.submissionMode === 'csv';
   els.submissionModeToggle.dataset.mode = state.submissionMode;
   els.submissionModeToggle.setAttribute('aria-label', `Chế độ nộp bài hiện tại ${isCsv ? 'CSV' : 'DRES'}`);
-  els.dresOpenBtn.hidden = isCsv;
+  els.dresOpenBtn.hidden = true;
   els.queryStrip.hidden = !isCsv;
   els.taskType.disabled = isCsv && Boolean(activeQuery());
-  els.qaSubmitBtn.title = isCsv ? 'Ghi đáp án Q&A vào CSV' : 'Nộp câu trả lời Q&A lên DRES';
-  els.trakeSubmitBtn.title = isCsv ? 'Ghi TRAKE vào CSV' : 'Nộp TRAKE lên DRES';
+  updateMemberNameDisplay();
+  if (els.trakeSubmitBtn) els.trakeSubmitBtn.title = isCsv ? 'Ghi TRAKE vào CSV' : 'Nộp TRAKE lên DRES';
+  if (els.videoTrakeSubmitBtn) els.videoTrakeSubmitBtn.title = isCsv ? 'Ghi TRAKE vào CSV' : 'Nộp TRAKE lên DRES';
   renderQueryStrip();
   renderActiveQuery();
   renderTaskControls();
@@ -233,33 +286,132 @@ function toggleSubmissionMode() {
   renderSubmissionMode();
 }
 
+function currentDisplayName() {
+  return (state.memberName || state.dresUsername || '').trim() || 'Thành viên';
+}
+
+function sendViewingStatus() {
+  if (!state.activeQueryFilename) return;
+  const displayName = currentDisplayName();
+  const payload = {
+    type: 'viewing',
+    client_id: state.clientId,
+    name: displayName,
+    filename: state.activeQueryFilename
+  };
+  if (state.teamSocket && state.teamSocket.readyState === WebSocket.OPEN) {
+    try {
+      state.teamSocket.send(JSON.stringify(payload));
+    } catch {}
+  } else {
+    fetch('/team/viewing', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(payload)
+    }).catch(() => {});
+  }
+}
+
+function updateMemberNameDisplay() {
+  const label = document.getElementById('memberNameDisplay');
+  if (label) {
+    label.textContent = state.memberName || state.dresUsername || 'Đặt tên';
+  }
+}
+
+function promptChangeMemberName() {
+  const current = state.memberName || state.dresUsername || '';
+  const entered = prompt('Nhập tên của bạn để hiển thị cho đồng đội:', current);
+  if (entered === null) return;
+  const clean = entered.trim();
+  if (!clean) return;
+  state.memberName = clean;
+  if (els.memberName) els.memberName.value = clean;
+  saveMemberCache();
+  updateMemberNameDisplay();
+  sendViewingStatus();
+  syncUserProfile({ restore_active_query: true });
+  fetch('/team/member', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({client_id: state.clientId, name: clean})
+  }).catch(() => {});
+}
+
+async function syncUserProfile(updates = {}) {
+  const name = (state.memberName || state.dresUsername || '').trim();
+  if (!name) return;
+  try {
+    const payload = { name, ...updates };
+    const resp = await fetch('/team/user/sync', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    if (!resp.ok) return;
+    const data = await resp.json();
+    if (data.drafts && typeof data.drafts === 'object') {
+      state.userDrafts = { ...state.userDrafts, ...data.drafts };
+      if (state.activeQueryFilename && state.userDrafts[state.activeQueryFilename] !== undefined) {
+        if (!els.qaAnswer.matches(':focus')) {
+          els.qaAnswer.value = state.userDrafts[state.activeQueryFilename];
+        }
+      }
+    }
+    if (data.active_query && updates.restore_active_query) {
+      if (state.queryCatalog.some(q => q.filename === data.active_query)) {
+        if (state.activeQueryFilename !== data.active_query) {
+          selectLocalQuery(data.active_query);
+        }
+      }
+    }
+  } catch {}
+}
+
 async function loadSubmissionQueries() {
   try {
     const response = await fetch('/submission/queries', {cache: 'no-store'});
     const payload = await response.json();
     if (!response.ok) throw new Error(payload.detail || `HTTP ${response.status}`);
     state.queryCatalog = Array.isArray(payload.queries) ? payload.queries : [];
+    const savedQuery = typeof sessionStorage !== 'undefined' ? (sessionStorage.getItem(ACTIVE_QUERY_CACHE_KEY) || '') : '';
+    if (savedQuery && state.queryCatalog.some(q => q.filename === savedQuery)) {
+      state.activeQueryFilename = savedQuery;
+    } else if (!state.activeQueryFilename && state.queryCatalog.length > 0) {
+      state.activeQueryFilename = state.queryCatalog[0].filename;
+      try { sessionStorage.setItem(ACTIVE_QUERY_CACHE_KEY, state.activeQueryFilename); } catch {}
+    } else if (state.activeQueryFilename && !state.queryCatalog.some(q => q.filename === state.activeQueryFilename) && state.queryCatalog.length > 0) {
+      state.activeQueryFilename = state.queryCatalog[0].filename;
+      try { sessionStorage.setItem(ACTIVE_QUERY_CACHE_KEY, state.activeQueryFilename); } catch {}
+    }
+    sendViewingStatus();
     renderQueryStrip();
     renderActiveQuery();
+    if (state.memberName) syncUserProfile({ restore_active_query: !savedQuery });
   } catch (error) {
     showError(`Không tải được danh sách query: ${error.message || error}`);
   }
 }
 
-async function selectSharedQuery(filename) {
+function selectLocalQuery(filename) {
+  state.activeQueryFilename = filename;
   try {
-    const response = await fetch('/team/query', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({filename})
-    });
-    const payload = await response.json();
-    if (!response.ok) throw new Error(payload.detail || `HTTP ${response.status}`);
-    applyTeamState(payload);
-    showError('');
-  } catch (error) {
-    showError(error.message || String(error));
+    sessionStorage.setItem(ACTIVE_QUERY_CACHE_KEY, filename);
+  } catch {}
+  if (state.userDrafts && state.userDrafts[filename] !== undefined) {
+    els.qaAnswer.value = state.userDrafts[filename];
+  } else {
+    els.qaAnswer.value = '';
   }
+  sendViewingStatus();
+  syncUserProfile({ active_query: filename });
+  renderQueryStrip();
+  renderActiveQuery();
+  renderSubmissionMode();
+}
+
+async function selectSharedQuery(filename) {
+  selectLocalQuery(filename);
 }
 
 function setLog(message) {
@@ -455,6 +607,8 @@ const TIMING_ROWS = [
   ,['ranking_ms', 'Xếp hạng chuỗi', 'Loại chuỗi trùng, sắp xếp và lấy Top-K.']
   ,['session_update_ms', 'Cập nhật phiên', 'Cập nhật trạng thái phiên temporal trong RAM.']
   ,['frontend_response_ms', 'Frontend nhận phản hồi', 'Thời gian từ lúc gửi request đến khi trình duyệt đọc xong JSON.']
+  ,['transit_up_ms', '🛫 Chặng đi (Client → Backend)', 'Thời gian request truyền qua mạng từ trình duyệt đến backend.']
+  ,['transit_down_ms', '🛬 Chặng về (Backend → Client)', 'Thời gian kết quả truyền qua mạng từ backend về lại trình duyệt.']
   ,['frontend_render_ms', 'Frontend dựng kết quả', 'Thời gian dựng DOM kết quả sau khi nhận phản hồi.']
   ,['first_thumbnail_ms', 'Thumbnail đầu tiên', 'Thời gian từ lúc dựng kết quả đến khi thumbnail đầu tiên sẵn sàng.']
   ,['all_visible_thumbnails_ms', 'Toàn bộ thumbnail', 'Thời gian từ lúc dựng kết quả đến khi toàn bộ thumbnail hiện tại tải xong.']
@@ -559,6 +713,103 @@ function closeTimingModal() {
   els.timingModal.hidden = true;
 }
 
+async function openStatsModal() {
+  els.statsModal.hidden = false;
+  const name = (state.memberName || state.dresUsername || '').trim();
+  els.personalStatsList.innerHTML = '<div class="stats-empty">Đang tải dữ liệu...</div>';
+  if (els.teamHistoryList) els.teamHistoryList.innerHTML = '<div class="stats-empty">Đang tải dữ liệu...</div>';
+  els.leaderboardList.innerHTML = '<div class="stats-empty">Đang tải dữ liệu...</div>';
+  try {
+    const resp = await fetch(`/team/user/stats?name=${encodeURIComponent(name)}`);
+    if (!resp.ok) throw new Error('Không thể tải thống kê');
+    const data = await resp.json();
+
+    els.personalSubCount.textContent = String(data.user_submissions_count || 0);
+    if (els.teamHistorySubCount) els.teamHistorySubCount.textContent = String(data.total_team_submissions || 0);
+    els.teamSubCount.textContent = String(data.total_team_submissions || 0);
+
+    // Render Personal History
+    const personal = data.personal_history || [];
+    if (personal.length === 0) {
+      els.personalStatsList.innerHTML = `<div class="stats-empty">${name ? `User <strong>${escapeHtml(name)}</strong> chưa nộp câu nào.` : 'Chưa có tên user. Hãy đặt tên để theo dõi.'}</div>`;
+    } else {
+      els.personalStatsList.innerHTML = personal.map(item => {
+        const timeStr = item.timestamp ? new Date(item.timestamp * 1000).toLocaleTimeString() : '';
+        const summary = item.content_summary || (Array.isArray(item.row) ? item.row.join(', ') : '');
+        return `
+          <div class="stats-card">
+            <div class="stats-card-main">
+              <div style="display: flex; align-items: center; gap: 6px;">
+                <span class="stats-card-query">${escapeHtml(item.query_filename)}</span>
+                <span class="query-chip-viewer" style="background: #ecfdf5; color: #047857; border-color: #a7f3d0;">${escapeHtml((item.task_type || '').toUpperCase())}</span>
+              </div>
+              <span class="stats-card-answer"><strong>Nội dung nộp:</strong> ${escapeHtml(summary)}</span>
+            </div>
+            <span class="stats-card-time">${escapeHtml(timeStr)}</span>
+          </div>
+        `;
+      }).join('');
+    }
+
+    // Render Team History (Who modified what, which question)
+    const teamHistory = data.team_history || [];
+    if (els.teamHistoryList) {
+      if (teamHistory.length === 0) {
+        els.teamHistoryList.innerHTML = '<div class="stats-empty">Chưa có hoạt động nộp bài nào từ đội.</div>';
+      } else {
+        els.teamHistoryList.innerHTML = teamHistory.map(item => {
+          const timeStr = item.timestamp ? new Date(item.timestamp * 1000).toLocaleTimeString() : '';
+          const summary = item.content_summary || (Array.isArray(item.row) ? item.row.join(', ') : '');
+          const isMe = name && (item.user_name || '').trim().toLowerCase() === name.toLowerCase();
+          return `
+            <div class="stats-card" style="border-left: 3px solid ${isMe ? 'var(--accent)' : '#9ca3af'};">
+              <div class="stats-card-main">
+                <div style="display: flex; align-items: center; gap: 6px;">
+                  <span class="query-chip-viewer" style="${isMe ? 'background: #fdf2f2; color: var(--accent); border-color: #fca5a5;' : ''}">👤 ${escapeHtml(item.user_name || 'Ẩn danh')}</span>
+                  <span class="stats-card-query">${escapeHtml(item.query_filename)}</span>
+                  <span style="font-size: 11px; font-weight: 700; color: #6b7280;">[${escapeHtml((item.task_type || '').toUpperCase())}]</span>
+                </div>
+                <span class="stats-card-answer"><strong>Đã nộp/sửa:</strong> ${escapeHtml(summary)}</span>
+              </div>
+              <span class="stats-card-time">${escapeHtml(timeStr)}</span>
+            </div>
+          `;
+        }).join('');
+      }
+    }
+
+    // Render Leaderboard
+    const leaderboard = data.leaderboard || [];
+    if (leaderboard.length === 0) {
+      els.leaderboardList.innerHTML = '<div class="stats-empty">Toàn đội chưa nộp câu nào.</div>';
+    } else {
+      els.leaderboardList.innerHTML = leaderboard.map((item, idx) => `
+        <div class="leaderboard-item">
+          <div>
+            <span class="leaderboard-rank ${idx === 0 ? 'top-1' : ''}">${idx + 1}</span>
+            <span class="leaderboard-name">${escapeHtml(item.name)}</span>
+          </div>
+          <span class="leaderboard-count">${item.count} câu</span>
+        </div>
+      `).join('');
+    }
+  } catch (err) {
+    els.personalStatsList.innerHTML = `<div class="stats-empty is-error">${escapeHtml(err.message || String(err))}</div>`;
+  }
+}
+
+function closeStatsModal() {
+  els.statsModal.hidden = true;
+}
+
+function openShortcutsModal() {
+  if (els.shortcutsModal) els.shortcutsModal.hidden = false;
+}
+
+function closeShortcutsModal() {
+  if (els.shortcutsModal) els.shortcutsModal.hidden = true;
+}
+
 function normalizeOcrPercent(value, fallback = 41) {
   const parsed = Number(value);
   const fallbackValue = Number(fallback);
@@ -593,7 +844,7 @@ function renderStages() {
     card.dataset.stageId = stage.id;
     card.innerHTML = `
       <div class="stage-head${isCompletedTemporalStage ? ' is-collapsible' : ''}" ${isCompletedTemporalStage ? `role="button" tabindex="0" aria-expanded="${stage.temporalExpanded === true}" title="Bấm để ${stage.temporalExpanded === true ? 'thu gọn' : 'chỉnh sửa'} Query ${stageLetter(index)}"` : ''}>
-        <div><span class="badge">${stageNumber}</span> <strong>Hành động ${stageLetter(index)}</strong>${isCompletedTemporalStage ? ' <span class="badge">Đã tìm</span>' : ''}</div>
+        <div>${isCompletedTemporalStage ? '<span class="badge">Đã tìm</span>' : ''}</div>
         ${state.stages.length > 1 ? `<button class="stage-remove" type="button" title="Xóa Query ${stageLetter(index)}" aria-label="Xóa Query ${stageLetter(index)}">${trashIcon()}</button>` : ''}
       </div>
       <div class="stage-fields" ${isCompletedTemporalStage && stage.temporalExpanded !== true ? 'hidden' : ''}>
@@ -783,6 +1034,11 @@ function setSimilarityItem(item) {
   state.similarityItem = item;
   syncSearchModeControls();
   renderStages();
+  const imageUrl = item.thumbnail_url || `/thumbnail/${encodeURIComponent(item.keyframe_id)}`;
+  if (els.globalSimilarityDropzone) {
+    els.globalSimilarityDropzone.style.padding = '4px';
+    els.globalSimilarityDropzone.innerHTML = `<img src="${escapeHtml(imageUrl)}" alt="${escapeHtml(item.video_id)}" style="width: 100%; height: auto; display: block; border-radius: 4px;" title="Đã chọn: ${escapeHtml(item.video_id)} - Frame ${escapeHtml(frameId(item))}" />`;
+  }
   showError('');
 }
 
@@ -874,19 +1130,19 @@ function setSearchMode(mode) {
 
 function syncSearchModeControls() {
   if (els.searchModeToggle) els.searchModeToggle.hidden = true;
-  if (els.temporalActions) els.temporalActions.hidden = false;
-  if (els.resetTemporalBtn) els.resetTemporalBtn.disabled = !state.temporalSessionId && state.stages.length <= 1;
-  if (els.addStageBtn) els.addStageBtn.disabled = state.stages.length >= 5;
+
 }
 
 function syncEmbeddingModelControls() {
   const isBeit3 = state.embeddingModel === 'beit3';
   if (els.embeddingModelToggle) {
     els.embeddingModelToggle.dataset.model = state.embeddingModel;
+    els.embeddingModelToggle.textContent = isBeit3 ? 'BEiT-3' : 'MetaCLIP-2';
     els.embeddingModelToggle.title = isBeit3
       ? 'Đang dùng BEiT-3. Bấm để đổi sang MetaCLIP-2.'
       : 'Đang dùng MetaCLIP-2. Bấm để đổi sang BEiT-3.';
     els.embeddingModelToggle.setAttribute('aria-label', `Mô hình embedding ${isBeit3 ? 'BEiT-3' : 'MetaCLIP-2'}`);
+    els.embeddingModelToggle.classList.toggle('is-beit3', isBeit3);
   }
 }
 
@@ -1115,66 +1371,140 @@ function uniqueVideoFrames(videoId, activeItem) {
   return [...byKey.values()].sort((a, b) => answerTimeMs(a) - answerTimeMs(b));
 }
 
+function centerActiveFrameInStrip(smooth = false) {
+  if (!els.videoFrameStrip) return;
+  const target = els.videoFrameStrip.querySelector('.is-candidate-shot') || els.videoFrameStrip.querySelector('.is-active');
+  if (!target) return;
+  const strip = els.videoFrameStrip;
+  const stripWidth = strip.clientWidth;
+  if (stripWidth <= 0) {
+    window.requestAnimationFrame(() => centerActiveFrameInStrip(smooth));
+    return;
+  }
+  const targetRect = target.getBoundingClientRect();
+  const stripRect = strip.getBoundingClientRect();
+  const relativeLeft = targetRect.left - stripRect.left + strip.scrollLeft;
+  const targetScrollLeft = relativeLeft - (stripWidth / 2) + (target.offsetWidth / 2);
+  strip.scrollTo({
+    left: Math.max(0, targetScrollLeft),
+    behavior: smooth ? 'smooth' : 'auto'
+  });
+}
+
 function renderVideoFrameItems(items, activeItem) {
   if (!els.videoFrameStrip) return;
   els.videoFrameStrip.innerHTML = '';
   if (items.length === 0) return;
   items.forEach(item => {
-    const seconds = answerTimeMs(item) / 1000;
-    const isCandidateShot = Boolean(item.is_candidate)
-      || (item.video_id === activeItem.video_id && Number(item.shot_id) === Number(activeItem.shot_id));
+    const seconds = Number.isFinite(item.timestamp_seconds) ? item.timestamp_seconds : (answerTimeMs(item) / 1000);
+    const isCurrentFrame = Boolean(item.is_current)
+      || (activeItem && item.keyframe_id === activeItem.keyframe_id)
+      || (activeItem && item.frame_id !== undefined && activeItem.frame_id !== undefined && Number(item.frame_id) === Number(activeItem.frame_id));
     const btn = document.createElement('button');
-    btn.className = `video-frame-thumb${isCandidateShot ? ' is-candidate-shot' : ''}`;
+    btn.className = `video-frame-thumb${isCurrentFrame ? ' is-candidate-shot is-active' : ''}`;
     btn.type = 'button';
     btn.dataset.seconds = String(seconds);
-    btn.dataset.shotId = String(item.shot_id ?? '');
-    btn.title = `Shot ${item.shot_id} · ${formatVideoTime(seconds)}`;
+    if (item.shot_id !== undefined) btn.dataset.shotId = String(item.shot_id ?? '');
+    if (item.frame_id !== undefined) btn.dataset.frameId = String(item.frame_id ?? '');
+    const titleText = item.frame_id !== undefined
+      ? `Frame ${item.frame_id} · ${formatVideoTime(seconds)}`
+      : `Shot ${item.shot_id} · ${formatVideoTime(seconds)}`;
+    const labelText = item.frame_id !== undefined
+      ? `F${item.frame_id} · ${formatVideoTime(seconds)}`
+      : formatVideoTime(seconds);
+    btn.title = titleText;
     btn.innerHTML = `
-      <img src="/thumbnail/${encodeURIComponent(item.keyframe_id)}" alt="${item.video_id} shot ${item.shot_id}" loading="lazy" />
-      <span>${formatVideoTime(seconds)}</span>`;
-    btn.addEventListener('click', () => seekVideoToSeconds(seconds, true));
+      <img src="/thumbnail/${encodeURIComponent(item.keyframe_id)}" alt="${item.video_id} ${item.frame_id !== undefined ? 'frame ' + item.frame_id : 'shot ' + item.shot_id}" loading="lazy" />
+      <span>${labelText}</span>`;
+    btn.addEventListener('click', () => {
+      seekVideoToSeconds(seconds, true);
+      centerActiveFrameInStrip(true);
+    });
     els.videoFrameStrip.appendChild(btn);
   });
+
+  // Mathematically center the candidate frame (frame gốc) immediately upon rendering
+  centerActiveFrameInStrip(false);
+  window.requestAnimationFrame(() => centerActiveFrameInStrip(false));
+  window.setTimeout(() => centerActiveFrameInStrip(false), 50);
+  window.setTimeout(() => centerActiveFrameInStrip(false), 150);
+  window.setTimeout(() => centerActiveFrameInStrip(false), 300);
   updateVideoFrameStripActive();
 }
 
 function renderVideoFrameStrip(activeItem) {
   if (!els.videoFrameStrip) return;
   renderVideoFrameItems(uniqueVideoFrames(activeItem.video_id, activeItem), activeItem);
+  state.activeFrameContextFrames = [];
   state.activeShotContextFrames = [];
-  els.expandShotContextBtn.disabled = true;
-  if (activeItem.shot_id === null || activeItem.shot_id === undefined || !Number.isInteger(Number(activeItem.shot_id))) return;
+  if (els.expandShotContextBtn) els.expandShotContextBtn.disabled = true;
+  if (els.expandFrameContextBtn) els.expandFrameContextBtn.disabled = false;
 
-  const cacheKey = `${activeItem.video_id}:${activeItem.shot_id}:${activeItem.keyframe_id}`;
-  let request = state.shotContextCache.get(cacheKey);
-  if (!request) {
-    const params = new URLSearchParams({
-      keyframe_id: activeItem.keyframe_id,
-      timestamp_ms: String(answerTimeMs(activeItem))
+  const timestampMs = Math.max(0, Math.round(answerTimeMs(activeItem) || 0));
+
+  // Prefetch shot-context in background so 24-shot overview button is ready if needed
+  if (activeItem.shot_id !== null && activeItem.shot_id !== undefined && Number.isInteger(Number(activeItem.shot_id))) {
+    const shotCacheKey = `${activeItem.video_id}:${activeItem.shot_id}:${activeItem.keyframe_id}`;
+    let shotReq = state.shotContextCache.get(shotCacheKey);
+    if (!shotReq) {
+      const params = new URLSearchParams({
+        keyframe_id: activeItem.keyframe_id,
+        timestamp_ms: String(timestampMs)
+      });
+      const url = `/shot-context/${encodeURIComponent(activeItem.video_id)}/${encodeURIComponent(activeItem.shot_id)}?${params}`;
+      shotReq = fetch(url).then(async response => {
+        if (!response.ok) return null;
+        return response.json();
+      }).catch(() => null);
+      state.shotContextCache.set(shotCacheKey, shotReq);
+    }
+    shotReq?.then(payload => {
+      if (payload && Array.isArray(payload.frames) && payload.frames.length > 0) {
+        state.activeShotContextFrames = payload.frames;
+        if (els.expandShotContextBtn) els.expandShotContextBtn.disabled = false;
+      }
     });
-    const url = `/shot-context/${encodeURIComponent(activeItem.video_id)}/${encodeURIComponent(activeItem.shot_id)}?${params}`;
-    request = fetch(url).then(async response => {
+  }
+
+  // Load 48 nearby frames into the bottom strip by default!
+  const frameCacheKey = `${activeItem.video_id}:frames:${timestampMs}`;
+  let frameReq = state.shotContextCache.get(frameCacheKey);
+  if (!frameReq) {
+    const params = new URLSearchParams({
+      timestamp_ms: String(timestampMs),
+      count: '49'
+    });
+    const url = `/frame-context/${encodeURIComponent(activeItem.video_id)}?${params}`;
+    frameReq = fetch(url).then(async response => {
       if (!response.ok) {
-        const error = new Error(`shot context HTTP ${response.status}`);
+        const error = new Error(`frame context HTTP ${response.status}`);
         error.status = response.status;
         throw error;
       }
       return response.json();
     });
-    state.shotContextCache.set(cacheKey, request);
-    request.catch(() => state.shotContextCache.delete(cacheKey));
+    state.shotContextCache.set(frameCacheKey, frameReq);
+    frameReq.catch(() => state.shotContextCache.delete(frameCacheKey));
   }
-  request.then(payload => {
+
+  frameReq.then(payload => {
     const isStillActive = state.activeVideoItem
       && state.activeVideoItem.video_id === activeItem.video_id
       && state.activeVideoItem.keyframe_id === activeItem.keyframe_id;
     if (!isStillActive || !Array.isArray(payload.frames) || payload.frames.length === 0) return;
-    state.activeShotContextFrames = payload.frames;
-    els.expandShotContextBtn.disabled = false;
+    state.activeFrameContextFrames = payload.frames;
     renderVideoFrameItems(payload.frames, activeItem);
+
+    // Ensure frame gốc is centered in view
+    centerActiveFrameInStrip(false);
+    window.requestAnimationFrame(() => centerActiveFrameInStrip(false));
+    window.setTimeout(() => centerActiveFrameInStrip(false), 80);
+    window.setTimeout(() => centerActiveFrameInStrip(false), 200);
   }).catch(error => {
-    // Keep the existing same-video result strip as a non-blocking fallback.
-    if (error.status === 503 && state.activeVideoItem?.keyframe_id === activeItem.keyframe_id) {
+    // If frame-context fails or 503, fallback to shot-context or retry
+    if (state.activeShotContextFrames && state.activeShotContextFrames.length > 0) {
+      renderVideoFrameItems(state.activeShotContextFrames, activeItem);
+    } else if (error.status === 503 && state.activeVideoItem?.keyframe_id === activeItem.keyframe_id) {
       window.setTimeout(() => renderVideoFrameStrip(activeItem), 750);
     }
   });
@@ -1197,13 +1527,20 @@ function updateVideoFrameStripActive() {
   if (nearest) nearest.classList.add('is-active');
 }
 
+let expandBufferHandler = null;
+
 function destroyActiveHls() {
+  if (expandBufferHandler) {
+    els.player.removeEventListener('timeupdate', expandBufferHandler);
+    els.player.removeEventListener('seeking', expandBufferHandler);
+    expandBufferHandler = null;
+  }
   if (!activeHls) return;
   activeHls.destroy();
   activeHls = null;
 }
 
-function loadVideoSource(videoId) {
+function loadVideoSource(videoId, startSeconds = 0) {
   const hlsUrl = `/hls/${encodeURIComponent(videoId)}/playlist.m3u8`;
   destroyActiveHls();
   els.player.removeAttribute('src');
@@ -1214,7 +1551,39 @@ function loadVideoSource(videoId) {
     return;
   }
   if (window.Hls && window.Hls.isSupported()) {
-    activeHls = new window.Hls();
+    const targetStart = Math.max(0, startSeconds);
+    let isBufferExpanded = false;
+
+    // Ban đầu chỉ tải đúng dải ~3 giây quanh frame mục tiêu (tiết kiệm tối đa băng thông SSH)
+    activeHls = new window.Hls({
+      startPosition: Math.max(0, targetStart - 1.0),
+      maxBufferLength: 3,             // Chỉ buffer 3 giây phía trước
+      maxMaxBufferLength: 5,          // Ngưỡng tối đa ban đầu 5 giây
+      backBufferLength: 3,            // Chỉ giữ lại 3 giây phía sau
+      maxBufferSize: 5 * 1024 * 1024, // Bộ đệm ban đầu tối đa 5MB
+      enableWorker: true,
+      lowLatencyMode: false,
+    });
+
+    const initialWindowStart = Math.max(0, targetStart - 3.0);
+    const initialWindowEnd = targetStart + 3.0;
+
+    // Khi người dùng tua ra ngoài vùng 3s hoặc xem tiếp vượt qua 3s, tự động mở rộng buffer để stream bình thường
+    expandBufferHandler = () => {
+      if (isBufferExpanded || !activeHls) return;
+      const cur = Number(els.player.currentTime) || 0;
+      if (cur < initialWindowStart || cur > initialWindowEnd) {
+        isBufferExpanded = true;
+        activeHls.config.maxBufferLength = 10;
+        activeHls.config.maxMaxBufferLength = 20;
+        activeHls.config.backBufferLength = 10;
+        activeHls.config.maxBufferSize = 20 * 1024 * 1024;
+      }
+    };
+
+    els.player.addEventListener('timeupdate', expandBufferHandler);
+    els.player.addEventListener('seeking', expandBufferHandler);
+
     activeHls.loadSource(hlsUrl);
     activeHls.attachMedia(els.player);
     return;
@@ -1234,7 +1603,11 @@ function openResult(item) {
   els.player.preload = 'metadata';
   els.player.autoplay = true;
   setVideoRate(els.player.playbackRate || 1);
+  renderTaskControls();
   renderVideoFrameStrip(item);
+  renderTrakeTray();
+  window.setTimeout(() => centerActiveFrameInStrip(false), 100);
+  refreshIcons(els.videoModal);
   updateVideoControls();
   const playVideo = () => {
     if (hasPlayed) return;
@@ -1255,7 +1628,7 @@ function openResult(item) {
     els.player.removeEventListener('seeked', playOnce);
     playVideo();
   });
-  loadVideoSource(item.video_id);
+  loadVideoSource(item.video_id, startSeconds);
 }
 
 function closeVideo() {
@@ -1314,9 +1687,8 @@ function captureDisplayedFrame() {
       return;
     }
     const frameId = Math.max(0, Math.floor(mediaTime * fps + 1e-6));
-    const activeFrames = els.taskType.value === 'trake' ? state.trakeFrames : state.teamVotes;
-    const duplicate = activeFrames.some(vote =>
-      (els.taskType.value === 'trake' || vote.client_id === state.clientId)
+    const duplicate = state.teamVotes.some(vote =>
+      vote.client_id === state.clientId
       && vote.item?.video_id === item.video_id
       && Number(vote.item?.frame_id) === frameId
     );
@@ -1332,7 +1704,7 @@ function captureDisplayedFrame() {
       frame_id: String(frameId),
       timestamp_ms: String(Math.round(mediaTime * 1000)),
       fps: String(fps),
-      target: els.taskType.value === 'trake' ? 'trake' : 'team'
+      target: 'team'
     });
     try {
       const resp = await fetch(`/team/capture?${params}`, {
@@ -1350,26 +1722,109 @@ function captureDisplayedFrame() {
   }, 'image/jpeg', 0.9);
 }
 
-function submitDisplayedFrameToDres() {
+function captureDisplayedFrameToTrake() {
   const item = state.activeVideoItem;
-  const canSubmitCurrent = els.taskType.value === 'kis'
-    || (state.submissionMode === 'csv' && els.taskType.value === 'qa');
-  if (!canSubmitCurrent || !item) return;
-  if (els.player.readyState < HTMLMediaElement.HAVE_METADATA) {
-    showError('Video chưa sẵn sàng để submit frame hiện tại.');
+  if (!state.memberName) {
+    showError('Nhập tên gọi trước khi thêm frame vào TRAKE.');
+    openDresModal();
+    return;
+  }
+  if (!item || els.player.readyState < HTMLMediaElement.HAVE_CURRENT_DATA || !els.player.videoWidth) {
+    showError('Video chưa sẵn sàng để lấy frame.');
+    return;
+  }
+  const existingVideo = state.trakeFrames[0]?.item?.video_id;
+  if (existingVideo && existingVideo !== item.video_id) {
+    showError(`TRAKE đang chứa frame của ${existingVideo}; không thể thêm frame từ ${item.video_id}.`);
     return;
   }
   els.player.pause();
   const mediaTime = Math.max(0, Number(els.player.currentTime) || 0);
   const fps = fpsForVideo(item.video_id);
-  submitItemToDres({
+  if (!Number.isFinite(fps) || fps <= 0) {
+    showError(`Không tìm thấy FPS của video ${item.video_id}.`);
+    return;
+  }
+  const canvas = document.createElement('canvas');
+  canvas.width = els.player.videoWidth;
+  canvas.height = els.player.videoHeight;
+  const context = canvas.getContext('2d');
+  if (!context) {
+    showError('Trình duyệt không tạo được canvas để lấy frame.');
+    return;
+  }
+  context.drawImage(els.player, 0, 0, canvas.width, canvas.height);
+  canvas.toBlob(async blob => {
+    if (!blob) {
+      showError('Không thêm được frame đang hiển thị vào TRAKE.');
+      return;
+    }
+    const frameId = Math.max(0, Math.floor(mediaTime * fps + 1e-6));
+    const duplicate = state.trakeFrames.some(frame =>
+      frame.item?.video_id === item.video_id
+      && Number(frame.item?.frame_id) === frameId
+    );
+    if (duplicate) {
+      showError('Frame này đã có trong khay TRAKE.');
+      return;
+    }
+    const params = new URLSearchParams({
+      client_id: state.clientId,
+      name: state.memberName || state.dresUsername || 'Thành viên',
+      video_id: item.video_id,
+      shot_id: item.shot_id ?? '',
+      frame_id: String(frameId),
+      timestamp_ms: String(Math.round(mediaTime * 1000)),
+      fps: String(fps),
+      target: 'trake'
+    });
+    try {
+      const resp = await fetch(`/team/capture?${params}`, {
+        method: 'POST',
+        headers: {'Content-Type': blob.type || 'image/jpeg'},
+        body: blob
+      });
+      const teamState = await resp.json();
+      if (!resp.ok) throw new Error(teamState.detail || 'Không thêm được frame vào TRAKE.');
+      applyTeamState(teamState);
+      showError('');
+    } catch (error) {
+      showError(error.message || String(error));
+    }
+  }, 'image/jpeg', 0.9);
+}
+
+function getDisplayedVideoFrameItem() {
+  const item = state.activeVideoItem;
+  if (!item) {
+    showError('Chưa mở video để lấy frame.');
+    return null;
+  }
+  if (els.player.readyState < HTMLMediaElement.HAVE_METADATA) {
+    showError('Video chưa sẵn sàng để lấy frame hiện tại.');
+    return null;
+  }
+  els.player.pause();
+  const mediaTime = Math.max(0, Number(els.player.currentTime) || 0);
+  const fps = fpsForVideo(item.video_id);
+  return {
     ...item,
     timestamp_ms: Math.round(mediaTime * 1000),
     timestamp_seconds: mediaTime,
     frame_id: Number.isFinite(fps) && fps > 0
       ? Math.max(0, Math.floor(mediaTime * fps + 1e-6))
       : item.frame_id
-  });
+  };
+}
+
+function isMyVote(vote) {
+  if (!vote) return false;
+  const myName = (state.memberName || '').trim().toLowerCase();
+  const vName = (vote.name || '').trim().toLowerCase();
+  const vKey = (vote.user_key || '').trim().toLowerCase();
+  if (myName && (vName === myName || vKey === myName)) return true;
+  if (state.clientId && vote.client_id === state.clientId) return true;
+  return false;
 }
 
 function keyframeTrayId(item) {
@@ -1381,10 +1836,8 @@ function keyframeTrayId(item) {
 
 function isKeyframeInTray(item) {
   const targetFrameId = keyframeTrayId(item);
-  const isTrake = els.taskType.value === 'trake';
-  const activeFrames = isTrake ? state.trakeFrames : state.teamVotes;
-  return activeFrames.some(vote =>
-    (isTrake || vote.client_id === state.clientId)
+  return state.teamVotes.some(vote =>
+    vote.client_id === state.clientId
     && vote.item?.video_id === item.video_id
     && (vote.item?.keyframe_id === item.keyframe_id || Number(vote.item?.frame_id) === targetFrameId)
   );
@@ -1413,7 +1866,7 @@ async function addKeyframeToTray(item) {
     timestamp_seconds: timestampMs / 1000,
     fps
   };
-  return els.taskType.value === 'trake' ? addTrakeFrame(sharedItem) : voteForItem(sharedItem);
+  return voteForItem(sharedItem);
 }
 
 function openShotOverview() {
@@ -1421,7 +1874,9 @@ function openShotOverview() {
   const activeItem = state.activeVideoItem;
   if (!activeItem || frames.length === 0) return;
   els.shotOverviewTitle.textContent = `${activeItem.video_id} · ${frames.length} shot lân cận`;
-  els.shotOverviewGrid.innerHTML = frames.map((frame, index) => `
+  els.shotOverviewGrid.innerHTML = frames.map((frame, index) => {
+    const feedback = submissionFeedbackFor(frame);
+    return `
     <article class="shot-overview-card ${frame.is_candidate ? 'is-current' : ''}" data-shot-index="${index}">
       <img src="/thumbnail/${encodeURIComponent(frame.keyframe_id)}" alt="${escapeHtml(frame.video_id)} shot ${escapeHtml(frame.shot_id)}" loading="lazy" />
       <div class="shot-overview-caption">
@@ -1431,11 +1886,19 @@ function openShotOverview() {
       <div class="shot-overview-actions">
         <button class="frame-hover-action" type="button" data-overview-action="add" title="Thêm vào khay" aria-label="Thêm shot ${escapeHtml(frame.shot_id)} vào khay">${addToTrayIcon()}</button>
         <button class="frame-hover-action" type="button" data-overview-action="zoom" title="Phóng to và xem thông tin" aria-label="Phóng to shot ${escapeHtml(frame.shot_id)}">${zoomIcon()}</button>
+        <button class="frame-hover-action result-overlay-submit" type="button" data-overview-action="submit" title="Submit frame này" aria-label="Submit frame này">${submitIcon()}</button>
       </div>
       ${frame.is_candidate ? '<span class="current-frame-label">Frame hiện tại</span>' : ''}
-    </article>`).join('');
+      ${submissionFeedbackMarkup(feedback)}
+    </article>`;
+  }).join('');
   els.shotOverviewGrid.querySelectorAll('.shot-overview-card').forEach(card => {
     const frame = frames[Number(card.dataset.shotIndex)];
+    card.addEventListener('click', () => {
+      const seconds = answerTimeMs(frame) / 1000.0;
+      seekVideoToSeconds(seconds, false);
+      closeShotOverview();
+    });
     card.querySelector('[data-overview-action="add"]').addEventListener('click', async event => {
       event.stopPropagation();
       if (await addKeyframeToTray(frame)) event.currentTarget.classList.add('is-added');
@@ -1443,6 +1906,10 @@ function openShotOverview() {
     card.querySelector('[data-overview-action="zoom"]').addEventListener('click', event => {
       event.stopPropagation();
       openFrameImage(frame);
+    });
+    card.querySelector('[data-overview-action="submit"]').addEventListener('click', async event => {
+      event.stopPropagation();
+      await submit(frame);
     });
   });
   refreshIcons(els.shotOverviewGrid);
@@ -1470,25 +1937,51 @@ async function openFrameOverview() {
   els.frameOverviewGrid.innerHTML = '<div class="frame-overview-loading">Đang trích xuất frame…</div>';
   els.frameOverviewModal.hidden = false;
   try {
-    const params = new URLSearchParams({timestamp_ms: String(timestampMs), count: '48'});
+    const params = new URLSearchParams({timestamp_ms: String(timestampMs), count: '49'});
     const response = await fetch(`/frame-context/${encodeURIComponent(activeItem.video_id)}?${params}`);
     const payload = await response.json();
     if (!response.ok) throw new Error(payload.detail || 'Không tải được frame lân cận.');
     state.activeFrameContextFrames = payload.frames || [];
     els.frameOverviewTitle.textContent = `${activeItem.video_id} · ${state.activeFrameContextFrames.length} frame lân cận`;
-    els.frameOverviewGrid.innerHTML = state.activeFrameContextFrames.map((frame, index) => `
-      <button class="shot-overview-card frame-overview-card ${frame.is_current ? 'is-current' : ''}" type="button" data-frame-index="${index}" title="Tua đến frame ${frame.frame_id}">
+    els.frameOverviewGrid.innerHTML = state.activeFrameContextFrames.map((frame, index) => {
+      const feedback = submissionFeedbackFor(frame);
+      return `
+      <article class="shot-overview-card frame-overview-card ${frame.is_current ? 'is-current' : ''}" data-frame-index="${index}">
         <img src="/thumbnail/${encodeURIComponent(frame.keyframe_id)}" alt="${escapeHtml(frame.video_id)} frame ${frame.frame_id}" loading="lazy" />
-        <span class="shot-overview-caption"><strong>Frame ${frame.frame_id}</strong><span>${formatVideoTime(frame.timestamp_seconds)}</span></span>
+        <div class="shot-overview-caption">
+          <strong>Frame ${frame.frame_id}</strong>
+          <span>${formatVideoTime(frame.timestamp_seconds)}</span>
+        </div>
+        <div class="shot-overview-actions">
+          <button class="frame-hover-action" type="button" data-frame-action="add" title="Thêm vào khay" aria-label="Thêm frame ${frame.frame_id} vào khay">${addToTrayIcon()}</button>
+          <button class="frame-hover-action" type="button" data-frame-action="zoom" title="Phóng to và xem thông tin" aria-label="Phóng to frame ${frame.frame_id}">${zoomIcon()}</button>
+          <button class="frame-hover-action result-overlay-submit" type="button" data-frame-action="submit" title="Submit frame này" aria-label="Submit frame này">${submitIcon()}</button>
+        </div>
         ${frame.is_current ? '<span class="current-frame-label">Frame hiện tại</span>' : ''}
-      </button>`).join('');
+        ${submissionFeedbackMarkup(feedback)}
+      </article>`;
+    }).join('');
     els.frameOverviewGrid.querySelectorAll('.frame-overview-card').forEach(card => {
+      const frame = state.activeFrameContextFrames[Number(card.dataset.frameIndex)];
       card.addEventListener('click', () => {
-        const frame = state.activeFrameContextFrames[Number(card.dataset.frameIndex)];
-        seekVideoToSeconds(frame.timestamp_seconds, false);
+        const seconds = Number.isFinite(frame.timestamp_seconds) ? frame.timestamp_seconds : (answerTimeMs(frame) / 1000.0);
+        seekVideoToSeconds(seconds, false);
         closeFrameOverview();
       });
+      card.querySelector('[data-frame-action="add"]').addEventListener('click', async event => {
+        event.stopPropagation();
+        if (await addKeyframeToTray(frame)) event.currentTarget.classList.add('is-added');
+      });
+      card.querySelector('[data-frame-action="zoom"]').addEventListener('click', event => {
+        event.stopPropagation();
+        openFrameImage(frame);
+      });
+      card.querySelector('[data-frame-action="submit"]').addEventListener('click', async event => {
+        event.stopPropagation();
+        await submit(frame);
+      });
     });
+    refreshIcons(els.frameOverviewGrid);
     window.requestAnimationFrame(() => els.frameOverviewGrid.querySelector('.is-current')?.scrollIntoView({block: 'center', inline: 'center'}));
   } catch (error) {
     els.frameOverviewGrid.innerHTML = `<div class="frame-overview-loading is-error">${escapeHtml(error.message || String(error))}</div>`;
@@ -1552,11 +2045,7 @@ function closeFrameImage() {
 }
 
 function selectResult(item) {
-  if (els.taskType.value === 'trake') {
-    addKeyframeToTray(item);
-  } else {
-    voteForItem(item);
-  }
+  voteForItem(item);
 }
 
 function renderShotContext(item) {
@@ -1583,9 +2072,8 @@ function renderShotContext(item) {
 
 function renderTemporalResults() {
   const canSubmit = Boolean(
-    (state.submissionMode === 'csv' && activeQuery() && ['kis', 'qa'].includes(els.taskType.value))
-    || (state.submissionMode === 'dres' && state.dresSessionId
-      && state.dresSelectedEvaluationId && els.taskType.value === 'kis')
+    (state.submissionMode === 'csv' && activeQuery())
+    || (state.submissionMode === 'dres' && state.dresSessionId && state.dresSelectedEvaluationId)
   );
   sortResults(state.results).forEach((sequence, index) => {
     const scenes = Array.isArray(sequence.scenes) ? sequence.scenes : [];
@@ -1604,7 +2092,7 @@ function renderTemporalResults() {
       <div class="temporal-scenes">
         ${scenes.map((scene, sceneIndex) => `
           <section class="temporal-scene">
-            <div class="temporal-stage-label">Hành động ${sceneIndex + 1}</div>
+            <div class="temporal-stage-label">${sceneIndex + 1}</div>
             <button class="temporal-thumb" type="button" data-action="open" data-scene-index="${sceneIndex}" title="Mở video tại cảnh ${escapeHtml(scene.shot_id)}">
               <img src="/thumbnail/${encodeURIComponent(scene.keyframe_id)}" alt="${escapeHtml(scene.video_id)} cảnh ${escapeHtml(scene.shot_id)}" loading="lazy" />
             </button>
@@ -1624,7 +2112,7 @@ function renderTemporalResults() {
         event.stopPropagation();
         if (button.dataset.action === 'open') openResult(scene);
         if (button.dataset.action === 'select') selectResult(scene);
-        if (button.dataset.action === 'submit') submitItemToDres(scene);
+        if (button.dataset.action === 'submit') submit(scene);
       });
     });
     card.querySelectorAll('.temporal-thumb img').forEach(image => {
@@ -1641,9 +2129,8 @@ function renderResults() {
   els.results.classList.toggle('multi-results', state.searchMode === 'multi');
   sortResults(state.results).forEach((item, index) => {
     const canSubmit = Boolean(
-      (state.submissionMode === 'csv' && activeQuery() && ['kis', 'qa'].includes(els.taskType.value))
-      || (state.submissionMode === 'dres' && state.dresSessionId
-        && state.dresSelectedEvaluationId && els.taskType.value === 'kis')
+      (state.submissionMode === 'csv' && activeQuery())
+      || (state.submissionMode === 'dres' && state.dresSessionId && state.dresSelectedEvaluationId)
     );
     const submissionFeedback = submissionFeedbackFor(item);
     const card = document.createElement('article');
@@ -1714,7 +2201,7 @@ function renderResults() {
     if (submitBtn) {
       submitBtn.addEventListener('click', event => {
         event.stopPropagation();
-        submitItemToDres(item);
+        submit(item);
       });
     }
     const contextFrames = new Map([
@@ -1735,54 +2222,233 @@ function renderResults() {
 }
 
 function renderSelection() {
-  const isTrake = els.taskType.value === 'trake';
-  const sharedFrames = isTrake ? state.trakeFrames : state.teamVotes;
+  const sharedFrames = state.teamVotes;
   const isEmpty = sharedFrames.length === 0;
-  els.selectionTray.hidden = isEmpty;
-  els.appShell.classList.toggle('tray-empty', isEmpty);
+  els.selectionTray.hidden = false;
+  els.appShell.classList.remove('tray-empty');
   els.selectedFrames.innerHTML = '';
-  els.selectionTitle.textContent = isTrake ? 'Khay TRAKE' : 'Khay chung';
+  if (els.trayTabChung) els.trayTabChung.classList.add('is-active');
+  if (els.trayTabTrake) els.trayTabTrake.classList.remove('is-active');
   els.selectionCount.textContent = '';
   els.selectionCount.hidden = true;
-  els.trakeSubmitBtn.hidden = !isTrake;
-  els.trakeSubmitBtn.disabled = sharedFrames.length === 0;
-  els.clearBtn.textContent = isTrake ? 'Xóa TRAKE' : 'Xóa lựa chọn';
-  els.clearBtn.title = isTrake ? 'Xóa toàn bộ frame TRAKE dùng chung' : 'Xóa các frame đã chọn';
+  if (els.trakeSubmitBtn && els.trakeSubmitBtn !== els.videoTrakeSubmitBtn) {
+    els.trakeSubmitBtn.hidden = true;
+  }
+  els.clearBtn.textContent = 'Xóa lựa chọn';
+  els.clearBtn.title = 'Xóa các frame đã chọn';
+
+  if (isEmpty) {
+    const emptyNotice = document.createElement('div');
+    emptyNotice.className = 'tray-empty-notice';
+    emptyNotice.style.cssText = 'display: flex; align-items: center; justify-content: center; height: 100%; color: var(--text-muted); font-size: 13px; font-style: italic; width: 100%; user-select: none;';
+    emptyNotice.textContent = 'Khung chung trống. Bấm "Thêm vào khay" hoặc kéo thả frame vào đây để chia sẻ với đội.';
+    els.selectedFrames.appendChild(emptyNotice);
+    return;
+  }
+
   sharedFrames.forEach((vote, index) => {
     const item = vote.item;
     const submissionFeedback = submissionFeedbackFor(item);
     const imageUrl = item.thumbnail_url || `/thumbnail/${encodeURIComponent(item.keyframe_id)}`;
     const frame = document.createElement('div');
     frame.className = `selected-frame${submissionFeedback ? ` submission-${submissionFeedback}` : ''}`;
+    frame.draggable = true;
+    frame.addEventListener('dragstart', event => {
+      event.dataTransfer.effectAllowed = 'copyMove';
+      event.dataTransfer.setData('application/x-aic-keyframe', JSON.stringify(item));
+      event.dataTransfer.setData('application/x-aic-tray-index', index.toString());
+      frame.style.opacity = '0.5';
+    });
+    frame.addEventListener('dragend', () => {
+      frame.style.opacity = '1';
+    });
+    frame.addEventListener('dragover', event => {
+      event.preventDefault();
+      event.stopPropagation();
+      event.dataTransfer.dropEffect = 'move';
+      frame.style.transform = 'scale(1.02)';
+      frame.style.zIndex = '10';
+    });
+    frame.addEventListener('dragleave', event => {
+      event.stopPropagation();
+      frame.style.transform = '';
+      frame.style.zIndex = '';
+    });
+    frame.addEventListener('drop', event => {
+      event.preventDefault();
+      event.stopPropagation();
+      frame.style.transform = '';
+      frame.style.zIndex = '';
+      const fromIndex = parseInt(event.dataTransfer.getData('application/x-aic-tray-index'), 10);
+      if (!isNaN(fromIndex) && fromIndex !== index) {
+        const itemToMove = sharedFrames.splice(fromIndex, 1)[0];
+        sharedFrames.splice(index, 0, itemToMove);
+        renderSelection();
+      }
+    });
     frame.innerHTML = `
       <button class="selected-frame-view" type="button" title="Mở video tại frame đã chọn">
         <img src="${escapeHtml(imageUrl)}" alt="${escapeHtml(item.video_id)} frame ${escapeHtml(frameId(item))}" />
-        ${isTrake ? `<span class="trake-order">${index + 1}</span>` : ''}
         <em>${escapeHtml(vote.name)}</em>
       </button>
       <button class="selected-frame-remove" type="button" title="Xóa frame khỏi khay chung" aria-label="Xóa frame khỏi khay chung">&times;</button>
       <div class="selected-frame-actions">
+        <button class="selected-frame-open-video" type="button" title="Xem video" aria-label="Xem video">${openVideoIcon()}</button>
         <button class="selected-frame-zoom" type="button" title="Phóng to và xem thông tin" aria-label="Phóng to frame">${zoomIcon()}</button>
-        ${isTrake ? '' : `<button class="selected-frame-submit" type="button" title="Submit frame này" aria-label="Submit frame này">${submitIcon()}</button>`}
+        <button class="selected-frame-submit" type="button" title="Submit frame này" aria-label="Submit frame này">${submitIcon()}</button>
       </div>
       ${submissionFeedbackMarkup(submissionFeedback)}`;
     frame.querySelector('.selected-frame-view').addEventListener('click', () => openResult(item));
+    frame.querySelector('.selected-frame-open-video').addEventListener('click', event => {
+      event.stopPropagation();
+      openResult(item);
+    });
     frame.querySelector('.selected-frame-zoom').addEventListener('click', event => {
       event.stopPropagation();
       openFrameImage(item);
     });
+
     frame.querySelector('.selected-frame-submit')?.addEventListener('click', event => {
       event.stopPropagation();
-      submitItemToDres(item);
+      submit(item);
     });
     frame.querySelector('.selected-frame-remove').addEventListener('click', event => {
       event.stopPropagation();
-      if (isTrake) removeTrakeFrame(vote);
-      else removeTeamSelection(vote);
+      removeTeamSelection(vote);
     });
     els.selectedFrames.appendChild(frame);
   });
   refreshIcons(els.selectedFrames);
+}
+
+function renderTrakeTray() {
+  if (!els.videoTrakeFrames) return;
+  const allTrakeFrames = state.trakeFrames || [];
+  const currentVideoId = state.activeVideoItem?.video_id;
+  const trakeVideoId = allTrakeFrames[0]?.item?.video_id;
+  const isDifferentVideo = Boolean(trakeVideoId && currentVideoId && trakeVideoId !== currentVideoId);
+
+  if (els.videoTrakeCount) {
+    els.videoTrakeCount.textContent = String(isDifferentVideo ? 0 : allTrakeFrames.length);
+  }
+  if (els.videoTrakeSubmitBtn) {
+    els.videoTrakeSubmitBtn.disabled = allTrakeFrames.length === 0 || isDifferentVideo;
+  }
+  if (els.videoTrakeClearBtn) {
+    els.videoTrakeClearBtn.disabled = allTrakeFrames.length === 0;
+  }
+  els.videoTrakeFrames.innerHTML = '';
+
+  if (allTrakeFrames.length === 0) {
+    els.videoTrakeFrames.innerHTML = '<div class="video-trake-empty">Chưa có frame TRAKE.<br>Bấm <strong>Add TRAKE</strong> để thêm frame từ video đang xem.</div>';
+    return;
+  }
+
+  if (isDifferentVideo) {
+    els.videoTrakeFrames.innerHTML = `
+      <div class="video-trake-empty" style="text-align: center; padding: 16px 8px;">
+        <p style="color: var(--text-secondary); font-size: 13px; margin-bottom: 12px; line-height: 1.5;">
+          TRAKE đang chứa <strong>${allTrakeFrames.length}</strong> frame của video <strong>${escapeHtml(trakeVideoId)}</strong>.<br>
+          <span style="font-size: 11px; color: var(--text-muted);">(Mỗi bài TRAKE chỉ nhận frame từ 1 video duy nhất)</span>
+        </p>
+        <button id="videoTrakeSwitchVideoBtn" class="primary compact" type="button" style="width: 100%; margin-bottom: 8px; font-size: 12px;">
+          Mở lại video ${escapeHtml(trakeVideoId)}
+        </button>
+        <button id="videoTrakeResetForNewBtn" class="ghost compact" type="button" style="width: 100%; font-size: 12px; border: 1px solid var(--border);">
+          🗑️ Xóa để bắt đầu với video này
+        </button>
+      </div>
+    `;
+    const switchBtn = document.getElementById('videoTrakeSwitchVideoBtn');
+    if (switchBtn) {
+      switchBtn.addEventListener('click', () => {
+        openResult(allTrakeFrames[0].item);
+      });
+    }
+    const resetBtn = document.getElementById('videoTrakeResetForNewBtn');
+    if (resetBtn) {
+      resetBtn.addEventListener('click', clearTrakeFrames);
+    }
+    return;
+  }
+
+  const trakeFrames = allTrakeFrames;
+  trakeFrames.forEach((vote, index) => {
+    const item = vote.item;
+    const submissionFeedback = submissionFeedbackFor(item);
+    const imageUrl = item.thumbnail_url || item.image_url || `/thumbnail/${encodeURIComponent(item.keyframe_id)}`;
+    const frame = document.createElement('div');
+    frame.className = `selected-frame${submissionFeedback ? ` submission-${submissionFeedback}` : ''}`;
+    frame.draggable = true;
+    frame.addEventListener('dragstart', event => {
+      event.dataTransfer.effectAllowed = 'copyMove';
+      event.dataTransfer.setData('application/x-aic-trake-index', index.toString());
+      frame.style.opacity = '0.5';
+    });
+    frame.addEventListener('dragend', () => {
+      frame.style.opacity = '1';
+    });
+    frame.addEventListener('dragover', event => {
+      event.preventDefault();
+      event.stopPropagation();
+      event.dataTransfer.dropEffect = 'move';
+      frame.style.transform = 'scale(1.02)';
+      frame.style.zIndex = '10';
+    });
+    frame.addEventListener('dragleave', event => {
+      event.stopPropagation();
+      frame.style.transform = '';
+      frame.style.zIndex = '';
+    });
+    frame.addEventListener('drop', event => {
+      event.preventDefault();
+      event.stopPropagation();
+      frame.style.transform = '';
+      frame.style.zIndex = '';
+      const fromIndex = parseInt(event.dataTransfer.getData('application/x-aic-trake-index'), 10);
+      if (!isNaN(fromIndex) && fromIndex !== index) {
+        const itemToMove = trakeFrames.splice(fromIndex, 1)[0];
+        trakeFrames.splice(index, 0, itemToMove);
+        renderTrakeTray();
+      }
+    });
+    frame.innerHTML = `
+      <button class="selected-frame-view" type="button" title="Nhảy tới frame này trong video">
+        <img src="${escapeHtml(imageUrl)}" alt="${escapeHtml(item.video_id)} frame ${escapeHtml(frameId(item))}" />
+        <span class="trake-order">${index + 1}</span>
+        <em>${escapeHtml(vote.name)}</em>
+      </button>
+      <button class="selected-frame-remove" type="button" title="Xóa frame khỏi TRAKE" aria-label="Xóa frame khỏi TRAKE">&times;</button>
+      <div class="selected-frame-actions">
+        <button class="selected-frame-open-video" type="button" title="Tua tới frame này" aria-label="Tua tới frame này">${openVideoIcon()}</button>
+        <button class="selected-frame-zoom" type="button" title="Phóng to và xem thông tin" aria-label="Phóng to frame">${zoomIcon()}</button>
+      </div>
+      ${submissionFeedbackMarkup(submissionFeedback)}`;
+    
+    const jumpToFrame = () => {
+      if (state.activeVideoItem && state.activeVideoItem.video_id === item.video_id) {
+        const seconds = answerTimeMs(item) / 1000;
+        seekVideoToSeconds(seconds, true);
+      } else {
+        openResult(item);
+      }
+    };
+    frame.querySelector('.selected-frame-view').addEventListener('click', jumpToFrame);
+    frame.querySelector('.selected-frame-open-video').addEventListener('click', event => {
+      event.stopPropagation();
+      jumpToFrame();
+    });
+    frame.querySelector('.selected-frame-zoom').addEventListener('click', event => {
+      event.stopPropagation();
+      openFrameImage(item);
+    });
+    frame.querySelector('.selected-frame-remove').addEventListener('click', event => {
+      event.stopPropagation();
+      removeTrakeFrame(vote);
+    });
+    els.videoTrakeFrames.appendChild(frame);
+  });
+  refreshIcons(els.videoTrakeFrames);
 }
 
 function answerTimeMs(item) {
@@ -1804,54 +2470,100 @@ function csvFrameId(item) {
   throw new Error(`Không xác định được Frame ID cho ${item.video_id || 'video'}.`);
 }
 
-function buildSubmitPayload(items = state.selected) {
-  if (items.length === 0) throw new Error('Chọn ít nhất một frame trước khi tạo bài nộp.');
-  const taskType = els.taskType.value;
-  const first = items[0];
-  const timeMs = answerTimeMs(first);
+function getActiveTargetItem(target = null) {
+  if (target) {
+    if (Array.isArray(target) && target.length > 0) return target[0];
+    if (typeof target === 'object' && target.video_id) return target;
+  }
+  if (state.activeVideoItem) return state.activeVideoItem;
+  if (state.teamVotes.length > 0 && state.teamVotes[0].item) return state.teamVotes[0].item;
+  if (state.trakeFrames.length > 0 && state.trakeFrames[0].item) return state.trakeFrames[0].item;
+  if (state.selected?.length > 0) return state.selected[0];
+  if (state.results?.length > 0) {
+    const first = state.results[0];
+    if (first.video_id) return first;
+    if (Array.isArray(first.scenes) && first.scenes[0]) return first.scenes[0];
+  }
+  return null;
+}
 
-  if (taskType === 'kis') {
+function buildSubmitRequest(target = null, taskType = null) {
+  const selectedTask = (taskType || els.taskType?.value || 'kis').toLowerCase();
+
+  if (selectedTask === 'qa') {
+    const rawAnswer = els.qaAnswer?.value.trim() || '';
+    if (!rawAnswer) {
+      els.qaAnswer?.focus();
+      throw new Error('Vui lòng nhập câu trả lời Q&A trước khi nộp.');
+    }
+    const item = getActiveTargetItem(target);
+    if (!item) {
+      throw new Error('Cần chọn một frame hoặc mở video để lấy video_id và timestamp cho Q&A.');
+    }
+    const timeMs = answerTimeMs(item);
+    const answerText = rawAnswer.startsWith('QA-')
+      ? rawAnswer
+      : `QA-${rawAnswer}-${item.video_id}-${timeMs}`;
     return {
+      task_type: 'qa',
+      answer: answerText,
+      items: [item]
+    };
+  }
+
+  if (selectedTask === 'trake') {
+    let items = [];
+    if (Array.isArray(target) && target.length > 0) items = target;
+    else if (target && typeof target === 'object' && target.video_id) items = [target];
+    else items = state.trakeFrames.map(f => f.item).filter(Boolean);
+
+    if (items.length === 0) {
+      const active = getActiveTargetItem(target);
+      if (active) items = [active];
+    }
+    if (items.length === 0) {
+      throw new Error('Khay TRAKE đang trống; hãy thêm frame vào TRAKE trước khi nộp.');
+    }
+    const videoId = items[0].video_id;
+    const frameList = items.map(item => String(item.frame_id ?? frameId(item))).join(',');
+    return {
+      task_type: 'trake',
+      payload: {
+        answerSets: [{
+          answers: [{
+            text: `TR-${videoId}-${frameList}`
+          }]
+        }]
+      },
+      items
+    };
+  }
+
+  // KIS (default)
+  const item = getActiveTargetItem(target);
+  if (!item) {
+    throw new Error('Chọn một frame trước khi nộp KIS.');
+  }
+  const timeMs = answerTimeMs(item);
+  return {
+    task_type: 'kis',
+    payload: {
       answerSets: [{
         answers: [{
-          mediaItemName: first.video_id,
+          mediaItemName: item.video_id,
           start: String(timeMs),
           end: String(timeMs)
         }]
       }]
-    };
-  }
-
-  return buildTrakePayload(items);
-}
-
-function buildSubmitRequest(items = state.selected) {
-  if (els.taskType.value === 'qa') {
-    const answer = els.qaAnswer.value.trim();
-    if (!answer) throw new Error('Nhập câu trả lời Q&A trước khi tạo bài nộp.');
-    return {
-      task_type: 'qa',
-      answer
-    };
-  }
-  if (items.length === 0) throw new Error('Chọn ít nhất một frame trước khi tạo bài nộp.');
-  return {payload: buildSubmitPayload(items)};
-}
-
-function buildTrakePayload(items) {
-  if (!items.length) throw new Error('Không có frame để submit TRAKE.');
-  const videoId = items[0].video_id;
-  if (!items.every(item => item.video_id === videoId)) {
-    throw new Error('TRAKE cần các frame thuộc cùng một video.');
-  }
-  return {
-    answerSets: [{answers: [{text: `TR-${videoId}-${items.map(frameId).join(',')}`}]}]
+    },
+    items: [item]
   };
 }
 
 function loadDresCache() {
   try {
     const cached = JSON.parse(localStorage.getItem(DRES_CACHE_KEY) || '{}');
+
     state.dresSessionId = cached.sessionId || null;
     state.dresEvaluations = Array.isArray(cached.evaluations) ? cached.evaluations : [];
     state.dresSelectedEvaluationId = cached.evaluationId || '';
@@ -1862,6 +2574,34 @@ function loadDresCache() {
   } catch {
     localStorage.removeItem(DRES_CACHE_KEY);
   }
+}
+
+const LOCAL_TRAKE_CACHE_KEY = 'local_trake_frames';
+
+function loadLocalTrake() {
+  try {
+    const raw = localStorage.getItem(LOCAL_TRAKE_CACHE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        state.trakeFrames = parsed;
+      }
+    }
+  } catch {}
+}
+
+function saveLocalTrake() {
+  try {
+    const storable = state.trakeFrames.map(frame => ({
+      ...frame,
+      item: {
+        ...frame.item,
+        thumbnail_url: frame.item?.thumbnail_url?.startsWith('blob:') ? undefined : frame.item?.thumbnail_url,
+        image_url: frame.item?.image_url?.startsWith('blob:') ? undefined : frame.item?.image_url
+      }
+    }));
+    localStorage.setItem(LOCAL_TRAKE_CACHE_KEY, JSON.stringify(storable));
+  } catch {}
 }
 
 function loadMemberCache() {
@@ -1875,6 +2615,7 @@ function loadMemberCache() {
   state.memberName = cached.name || '';
   els.memberName.value = state.memberName;
   saveMemberCache();
+  loadLocalTrake();
 }
 
 function saveMemberCache() {
@@ -1903,22 +2644,54 @@ function saveDresCache() {
     username: state.dresUsername,
     sessionId: state.dresSessionId,
     evaluationId: state.dresSelectedEvaluationId,
-    evaluations: state.dresEvaluations
+    evaluations: state.dresEvaluations,
+    savedAt: Date.now()
   }));
 }
 
-function setDresStatus(message) {
-  els.dresStatus.textContent = message;
+function setTaskType(taskType) {
+  if (!['kis', 'trake', 'qa'].includes(taskType)) return;
+  els.taskType.value = taskType;
+  renderTaskControls();
+  if (taskType === 'qa') {
+    window.setTimeout(() => els.qaAnswer?.focus(), 60);
+  }
+}
+
+function cycleTaskType() {
+  const types = ['kis', 'trake', 'qa'];
+  const currentIndex = types.indexOf(els.taskType.value);
+  const nextIndex = (currentIndex + 1) % types.length;
+  setTaskType(types[nextIndex]);
 }
 
 function renderTaskControls() {
-  const isQa = els.taskType.value === 'qa';
-  els.qaAnswer.hidden = !isQa;
-  els.qaSubmitBtn.hidden = !isQa;
-  els.videoSubmitCurrentBtn.hidden = els.taskType.value !== 'kis'
-    && !(state.submissionMode === 'csv' && isQa);
+  const task = (els.taskType?.value || 'kis').toLowerCase();
+  const isQa = task === 'qa';
+  const isTrake = task === 'trake';
+
+  if (els.qaAnswer) els.qaAnswer.hidden = !isQa;
+  if (els.videoSubmitCurrentBtn) {
+    els.videoSubmitCurrentBtn.hidden = false;
+  }
+
+  // Cột TRAKE và nút Add TRAKE chỉ hiển thị khi chọn loại bài TRAKE
+  if (els.videoTrakeTray) {
+    els.videoTrakeTray.hidden = !isTrake;
+  }
+  if (els.videoAddTrakeBtn) {
+    els.videoAddTrakeBtn.hidden = !isTrake;
+  }
+  const mainLayout = els.videoMainLayout || document.querySelector('.video-main-layout');
+  if (mainLayout) {
+    mainLayout.classList.toggle('is-trake-hidden', !isTrake);
+  }
+
   renderResults();
   renderSelection();
+  if (isTrake) {
+    renderTrakeTray();
+  }
 }
 
 function renderDresSession() {
@@ -1928,8 +2701,11 @@ function renderDresSession() {
   els.dresSessionView.hidden = !loggedIn || needsName;
   els.memberNameView.hidden = !needsName;
   els.dresTitle.textContent = !loggedIn ? 'DRES Login' : needsName ? 'Tên gọi của bạn' : 'DRES Active Session';
-  els.dresOpenBtn.textContent = loggedIn ? (state.memberName || state.dresUsername || 'DRES') : 'DRES';
-  els.dresOpenBtn.classList.toggle('is-active', loggedIn);
+  const sessionNameEl = document.getElementById('sessionMemberNameDisplay');
+  if (sessionNameEl) {
+    sessionNameEl.textContent = state.memberName || state.dresUsername || 'Chưa đặt';
+  }
+  els.dresOpenBtn.hidden = true; // Xóa nút đỏ duplicate; danh tính user đã nằm ở memberNameBtn
   renderResults();
 }
 
@@ -2030,7 +2806,9 @@ async function loginDres() {
   const username = els.dresUsername.value.trim();
   const password = els.dresPassword.value;
   if (!serverUrl || !username || !password) {
-    showError('Nhập DRES server, tên đăng nhập và mật khẩu trước khi đăng nhập.');
+    const msg = 'Nhập DRES server, tên đăng nhập và mật khẩu trước khi đăng nhập.';
+    showError(msg);
+    setDresStatus(msg);
     return;
   }
   els.dresLoginBtn.disabled = true;
@@ -2042,8 +2820,17 @@ async function loginDres() {
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({server_url: serverUrl, username, password})
     });
-    const loginPayload = await loginResp.json();
-    if (!loginResp.ok) throw new Error(loginPayload.detail || JSON.stringify(loginPayload));
+    const text = await loginResp.text();
+    let loginPayload = {};
+    try {
+      loginPayload = JSON.parse(text);
+    } catch {
+      loginPayload = { detail: text };
+    }
+    if (!loginResp.ok) {
+      const errMsg = loginPayload.description || loginPayload.detail || loginPayload.message || text || `HTTP ${loginResp.status}`;
+      throw new Error(errMsg);
+    }
     state.dresSessionId = loginPayload.sessionId;
     state.dresUsername = loginPayload.username || username;
     state.dresServerUrl = serverUrl;
@@ -2057,7 +2844,7 @@ async function loginDres() {
       body: JSON.stringify({server_url: serverUrl, session_id: state.dresSessionId})
     });
     const evaluations = await evalResp.json();
-    if (!evalResp.ok) throw new Error(evaluations.detail || JSON.stringify(evaluations));
+    if (!evalResp.ok) throw new Error(evaluations.detail || evaluations.description || JSON.stringify(evaluations));
     state.dresEvaluations = Array.isArray(evaluations) ? evaluations : [];
     renderEvaluations();
     renderDresSession();
@@ -2071,8 +2858,9 @@ async function loginDres() {
     saveDresCache();
     renderEvaluations();
     renderDresSession();
-    showError(error.message || String(error));
-    setDresStatus('Đăng nhập DRES thất bại.');
+    const reason = error.message || String(error);
+    showError(reason);
+    setDresStatus(`Đăng nhập DRES thất bại: ${reason}`);
   } finally {
     els.dresLoginBtn.disabled = false;
   }
@@ -2106,11 +2894,13 @@ async function logoutDres() {
 }
 
 function applyTeamState(teamState) {
-  state.teamVotes = Array.isArray(teamState.votes) ? teamState.votes : [];
-  state.trakeFrames = Array.isArray(teamState.trake_frames) ? teamState.trake_frames : [];
-  if (typeof teamState.active_query === 'string') {
-    state.activeQueryFilename = teamState.active_query;
+  if (Array.isArray(teamState.votes)) {
+    state.teamVotes = teamState.votes;
   }
+  if (Array.isArray(teamState.trake_frames)) {
+    state.trakeFrames = teamState.trake_frames;
+  }
+  // Active query is isolated locally per user
   const submissionCounts = teamState.submission_counts && typeof teamState.submission_counts === 'object'
     ? teamState.submission_counts
     : {};
@@ -2135,13 +2925,19 @@ function applyTeamState(teamState) {
   renderActiveQuery();
   renderSubmissionMode();
   renderSelection();
+  renderTrakeTray();
 }
 
 async function refreshTeamState() {
   try {
     const resp = await fetch('/team/state');
     const teamState = await resp.json();
-    if (resp.ok) applyTeamState(teamState);
+    if (resp.ok) {
+      if (teamState.query_viewers && typeof teamState.query_viewers === 'object') {
+        state.queryViewers = teamState.query_viewers;
+      }
+      applyTeamState(teamState);
+    }
   } catch {
     // Voting is a convenience layer; search should keep working if it is temporarily unavailable.
   }
@@ -2177,8 +2973,14 @@ function connectTeamSocket() {
   socket.addEventListener('message', event => {
     try {
       const payload = JSON.parse(event.data);
-      if (payload.type === 'submission_feedback') handleSubmissionFeedbackEvent(payload);
-      else applyTeamState(payload);
+      if (payload.type === 'submission_feedback') {
+        handleSubmissionFeedbackEvent(payload);
+      } else if (payload.type === 'viewers_update') {
+        state.queryViewers = payload.viewers || {};
+        renderQueryStrip();
+      } else if (payload.votes !== undefined || payload.members !== undefined || payload.trake_frames !== undefined) {
+        applyTeamState(payload);
+      }
     } catch {
       // Ignore malformed realtime updates; the next server event will refresh state.
     }
@@ -2230,44 +3032,24 @@ async function voteForItem(item) {
   }
 }
 
-async function addTrakeFrame(item) {
-  if (!state.memberName) {
-    showError('Đăng nhập DRES, chọn evaluation và nhập tên gọi trước khi thêm frame TRAKE.');
-    openDresModal();
-    return false;
-  }
-  const previousFrames = state.trakeFrames;
+function addTrakeFrame(item) {
   const existingVideo = state.trakeFrames[0]?.item?.video_id;
   if (existingVideo && existingVideo !== item.video_id) {
     showError(`TRAKE đang chứa frame của ${existingVideo}; không thể thêm frame từ ${item.video_id}.`);
     return false;
   }
-  const optimisticFrame = {
-    selection_id: `pending:trake:${state.clientId}:${item.keyframe_id}`,
+  const trakeFrame = {
+    selection_id: `local:trake:${Date.now()}:${item.keyframe_id || item.frame_id || Date.now()}`,
     client_id: state.clientId,
-    name: state.memberName,
+    name: state.memberName || 'Bạn',
     item,
     created_at: Date.now() / 1000
   };
-  state.trakeFrames = [...state.trakeFrames, optimisticFrame];
-  renderSelection();
-  try {
-    const resp = await fetch('/team/trake/add', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({client_id: state.clientId, name: state.memberName, item})
-    });
-    const teamState = await resp.json();
-    if (!resp.ok) throw new Error(teamState.detail || 'Không thêm được frame TRAKE.');
-    applyTeamState(teamState);
-    showError('');
-    return true;
-  } catch (error) {
-    state.trakeFrames = previousFrames;
-    renderSelection();
-    showError(error.message || String(error));
-    return false;
-  }
+  state.trakeFrames = [...state.trakeFrames, trakeFrame];
+  saveLocalTrake();
+  renderTrakeTray();
+  showError('');
+  return true;
 }
 
 async function removeTeamSelection(vote) {
@@ -2292,41 +3074,40 @@ async function removeTeamSelection(vote) {
 }
 
 async function removeTrakeFrame(frame) {
-  const previousFrames = state.trakeFrames;
   state.trakeFrames = state.trakeFrames.filter(item => item !== frame);
-  renderSelection();
+  saveLocalTrake();
+  renderTrakeTray();
   try {
     const resp = await fetch('/team/trake/remove', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({selection_id: frame.selection_id})
     });
-    const teamState = await resp.json();
-    if (!resp.ok) throw new Error(teamState.detail || 'Xóa frame TRAKE thất bại.');
-    applyTeamState(teamState);
-    showError('');
-  } catch (error) {
-    state.trakeFrames = previousFrames;
-    renderSelection();
-    showError(error.message || String(error));
+    if (resp.ok) {
+      const teamState = await resp.json();
+      applyTeamState(teamState);
+    }
+  } catch (err) {
+    console.error('Lỗi khi xóa frame TRAKE trên server:', err);
   }
 }
 
 async function clearTrakeFrames() {
-  if (!state.trakeFrames.length) return;
-  const previousFrames = state.trakeFrames;
   state.trakeFrames = [];
-  renderSelection();
+  saveLocalTrake();
+  renderTrakeTray();
   try {
-    const resp = await fetch('/team/trake/clear', {method: 'POST'});
-    const teamState = await resp.json();
-    if (!resp.ok) throw new Error(teamState.detail || 'Xóa danh sách TRAKE thất bại.');
-    applyTeamState(teamState);
-    showError('');
-  } catch (error) {
-    state.trakeFrames = previousFrames;
-    renderSelection();
-    showError(error.message || String(error));
+    const resp = await fetch('/team/trake/clear', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({})
+    });
+    if (resp.ok) {
+      const teamState = await resp.json();
+      applyTeamState(teamState);
+    }
+  } catch (err) {
+    console.error('Lỗi khi xóa toàn bộ TRAKE trên server:', err);
   }
 }
 
@@ -2337,13 +3118,16 @@ async function clearMyVotes() {
     return;
   }
   const previousVotes = state.teamVotes;
-  state.teamVotes = state.teamVotes.filter(vote => vote.client_id !== state.clientId);
+  state.teamVotes = state.teamVotes.filter(vote => !isMyVote(vote));
   renderSelection();
   try {
     const resp = await fetch('/team/clear', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({client_id: state.clientId})
+      body: JSON.stringify({
+        client_id: state.clientId,
+        name: state.memberName
+      })
     });
     const teamState = await resp.json();
     if (!resp.ok) throw new Error(teamState.detail || 'Xóa lựa chọn thất bại.');
@@ -2356,13 +3140,14 @@ async function clearMyVotes() {
   }
 }
 
-async function submitCsv(items = []) {
+async function submitCsv(items = [], submission = null) {
   const query = activeQuery();
   if (!query) {
     showError('Chọn một query trước khi ghi CSV.');
     return;
   }
-  if (query.task_type !== els.taskType.value) {
+  const taskType = submission?.task_type || query.task_type;
+  if (query.task_type !== taskType && query.task_type !== els.taskType.value) {
     showError(`Query ${query.label} là loại ${query.task_type.toUpperCase()}.`);
     return;
   }
@@ -2377,98 +3162,218 @@ async function submitCsv(items = []) {
     submittedItems = selectedItems;
   }
 
+  const userName = (state.memberName || state.dresUsername || 'Thành viên').trim() || 'Thành viên';
+  const payloadData = {
+    query_filename: query.filename,
+    user_name: userName,
+    name: userName,
+    items: submittedItems.map(item => ({
+      video_id: item.video_id,
+      frame_id: csvFrameId(item)
+    })),
+    answer: query.task_type === 'qa' ? (els.qaAnswer?.value.trim() || '') : ''
+  };
+
   setStatus('Đang ghi CSV', 'searching');
   showError('');
+  setLog(`[ĐANG GHI CSV]\n\nPAYLOAD GỬI ĐI (PAYLOAD):\n${JSON.stringify(payloadData, null, 2)}`);
   try {
     const response = await fetch('/submission/csv', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({
-        query_filename: query.filename,
-        items: submittedItems.map(item => ({
-          video_id: item.video_id,
-          frame_id: csvFrameId(item)
-        })),
-        answer: query.task_type === 'qa' ? els.qaAnswer.value : ''
-      })
+      body: JSON.stringify(payloadData)
     });
     const payload = await response.json();
     if (!response.ok) throw new Error(payload.detail || `HTTP ${response.status}`);
     query.answer_count = Number(payload.answer_count) || 0;
     renderQueryStrip();
     setStatus(`Đã ghi CSV (${query.answer_count})`, 'ok');
-    setLog(`${payload.output_filename}: ${JSON.stringify(payload.row)}`);
+    setLog(`[GHI CSV THÀNH CÔNG]\n\nFILE: ${payload.output_filename}\n\nPAYLOAD GỬI ĐI (PAYLOAD):\n${JSON.stringify(payloadData, null, 2)}\n\nKẾT QUẢ DÒNG GHI (ROW):\n${JSON.stringify(payload.row, null, 2)}`);
   } catch (error) {
-    showError(error.message || String(error));
+    const reason = error.message || String(error);
+    showError(reason);
     setStatus('Ghi CSV lỗi', 'error');
-    setLog(error.message || String(error));
+    setLog(`[GHI CSV THẤT BẠI]\n\nLÝ DO (REASON):\n${reason}\n\nPAYLOAD GỬI ĐI (PAYLOAD):\n${JSON.stringify(payloadData, null, 2)}`);
   }
 }
 
-async function submitItemToDres(item) {
-  if (state.submissionMode === 'csv') {
-    await submitCsv([item]);
-    return;
-  }
+async function submit(target = null, taskType = null) {
   let submission;
   try {
-    submission = buildSubmitRequest([item]);
+    submission = buildSubmitRequest(target, taskType);
   } catch (error) {
-    showError(error.message || String(error));
+    const reason = error.message || String(error);
+    showError(reason);
+    setLog(`[BUILD SUBMIT LỖI]\n\nLÝ DO (REASON):\n${reason}`);
+    return;
+  }
+
+  const items = submission.items || (Array.isArray(target) ? target : target ? [target] : []);
+
+  if (state.submissionMode === 'csv') {
+    await submitCsv(items, submission);
+    return;
+  }
+
+  await submitPayloadToDres(submission, items);
+}
+
+// Restored dedicated submit functions
+async function submitItemToDres(item) {
+  if (!item) {
+    showError('Chọn một frame trước khi nộp.');
+    return;
+  }
+  const timeMs = answerTimeMs(item);
+  const submission = {
+    task_type: 'kis',
+    payload: {
+      answerSets: [{
+        answers: [{
+          mediaItemName: item.video_id,
+          start: String(timeMs),
+          end: String(timeMs)
+        }]
+      }]
+    },
+    items: [item]
+  };
+  await submitPayloadToDres(submission, [item]);
+}
+
+async function submitSharedTrakeToDres() {
+  const trakeFrames = state.trakeFrames || [];
+  if (trakeFrames.length === 0) {
+    showError('Khay TRAKE đang trống. Hãy bấm "Add TRAKE" để thêm frame trước khi nộp.');
+    return;
+  }
+  const items = trakeFrames.map(f => f.item).filter(Boolean);
+  const videoId = items[0]?.video_id;
+  if (!videoId) {
+    showError('Không tìm thấy Video ID cho bài nộp TRAKE.');
+    return;
+  }
+  if (!items.every(item => item.video_id === videoId)) {
+    showError('TRAKE yêu cầu tất cả frame phải thuộc cùng một video.');
+    return;
+  }
+  const frameList = items.map(item => String(item.frame_id ?? frameId(item))).join(',');
+  const submission = {
+    task_type: 'trake',
+    payload: {
+      answerSets: [{
+        answers: [{
+          text: `TR-${videoId}-${frameList}`
+        }]
+      }]
+    },
+    items
+  };
+  await submitPayloadToDres(submission, items);
+}
+
+async function submitQaAnswerToDres(targetItem = null) {
+  const rawAnswer = els.qaAnswer?.value.trim() || '';
+  if (!rawAnswer) {
+    els.qaAnswer?.focus();
+    showError('Vui lòng nhập câu trả lời Q&A trước khi nộp.');
+    return;
+  }
+  let item = targetItem;
+  if (!item) {
+    if (state.activeVideoItem) item = getDisplayedVideoFrameItem() || state.activeVideoItem;
+    else if (state.teamVotes.length > 0 && state.teamVotes[0].item) item = state.teamVotes[0].item;
+    else if (state.trakeFrames.length > 0 && state.trakeFrames[0].item) item = state.trakeFrames[0].item;
+    else if (state.selected?.length > 0) item = state.selected[0];
+    else if (state.results?.length > 0) {
+      const first = state.results[0];
+      item = first.video_id ? first : (first.scenes?.[0] || null);
+    }
+  }
+  if (!item) {
+    showError('Q&A bắt buộc phải kèm Video ID và Timestamp. Hãy bấm nút Submit trên frame cần nộp hoặc mở video.');
+    return;
+  }
+  const timeMs = answerTimeMs(item);
+  const answerText = rawAnswer.startsWith('QA-')
+    ? rawAnswer
+    : `QA-${rawAnswer}-${item.video_id}-${timeMs}`;
+
+  const submission = {
+    task_type: 'qa',
+    answer: answerText,
+    items: [item]
+  };
+
+  if (state.submissionMode === 'csv') {
+    await submitCsv([item], submission);
     return;
   }
   await submitPayloadToDres(submission, [item]);
 }
 
-async function submitSharedTrakeToDres() {
+function submitDisplayedFrameToDres() {
+  const item = getDisplayedVideoFrameItem();
+  if (!item) {
+    showError('Không lấy được thông tin frame đang hiển thị.');
+    return;
+  }
   if (state.submissionMode === 'csv') {
-    await submitCsv(state.trakeFrames.map(frame => frame.item));
+    submitCsv([item]);
     return;
   }
-  let submission;
-  try {
-    submission = buildSubmitRequest(state.trakeFrames.map(frame => frame.item));
-  } catch (error) {
-    showError(error.message || String(error));
+  if (els.taskType.value === 'qa') {
+    submitQaAnswerToDres(item);
     return;
   }
-  await submitPayloadToDres(submission, state.trakeFrames.map(frame => frame.item));
-}
-
-async function submitQaAnswerToDres() {
-  if (state.submissionMode === 'csv') {
-    await submitCsv([]);
-    return;
-  }
-  let submission;
-  try {
-    submission = buildSubmitRequest([]);
-  } catch (error) {
-    showError(error.message || String(error));
-    return;
-  }
-  await submitPayloadToDres(submission);
+  submitItemToDres(item);
 }
 
 async function submitPayloadToDres(submission, submittedItems = []) {
   const serverUrl = state.dresServerUrl || els.dresServer.value.trim();
   const evaluationId = state.dresSelectedEvaluationId;
+  const fullPayload = {
+    server_url: serverUrl,
+    session_id: state.dresSessionId,
+    evaluation_id: evaluationId,
+    ...submission
+  };
+
   if (!serverUrl || !state.dresSessionId || !evaluationId) {
-    showError('Đăng nhập DRES và chọn evaluation trước khi submit.');
+    const missing = [];
+    if (!serverUrl) missing.push('Chưa nhập URL server DRES');
+    if (!state.dresSessionId) missing.push('Chưa đăng nhập DRES (thiếu session_id)');
+    if (!evaluationId) missing.push('Chưa chọn Evaluation (thiếu evaluation_id)');
+    const reason = `Chưa sẵn sàng submit DRES: ${missing.join(', ')}. Hãy bấm cấu hình DRES để đăng nhập và chọn evaluation.`;
+    showError(reason);
+    setLog(`[SUBMIT THẤT BẠI]\n\nLÝ DO (REASON):\n${reason}\n\nPAYLOAD GỬI ĐI (PAYLOAD):\n${JSON.stringify(submission, null, 2)}`);
     return;
   }
+
   showError('');
   unlockCorrectSound();
   setStatus('Đang submit', 'searching');
   setDresStatus('Đang submit DRES...');
+  setLog(`[ĐANG GỬI SUBMISSION LÊN DRES]\n\nSERVER: ${serverUrl}\nEVALUATION ID: ${evaluationId}\nSESSION ID: ${state.dresSessionId}\n\nPAYLOAD GỬI ĐI (PAYLOAD):\n${JSON.stringify(submission, null, 2)}`);
+
   try {
     const resp = await fetch('/dres/submit', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({server_url: serverUrl, session_id: state.dresSessionId, evaluation_id: evaluationId, ...submission})
+      body: JSON.stringify(fullPayload)
     });
     const text = await resp.text();
-    if (!resp.ok) throw new Error(text || 'Submit DRES thất bại.');
+    if (!resp.ok) {
+      let detailMsg = text;
+      try {
+        const parsed = JSON.parse(text);
+        detailMsg = parsed.detail || parsed.message || parsed.description || text;
+      } catch {}
+      const reason = `HTTP ${resp.status}: ${detailMsg || 'Server không phản hồi chi tiết.'}`;
+      const logText = `[SUBMIT THẤT BẠI]\n\nLÝ DO (REASON):\n${reason}\n\nPAYLOAD GỬI ĐI (PAYLOAD):\n${JSON.stringify(submission, null, 2)}\n\nPHẢN HỒI GỐC TỪ SERVER (RESPONSE BODY):\n${text || '(Trống)'}`;
+      setLog(logText);
+      throw new Error(reason);
+    }
     const feedback = parseSubmissionFeedback(text);
     if (feedback) {
       publishSubmissionFeedback(feedback, submittedItems);
@@ -2477,14 +3382,17 @@ async function submitPayloadToDres(submission, submittedItems = []) {
       feedback === 'wrong' ? 'WRONG' : feedback === 'correct' ? 'CORRECT' : 'Đã submit',
       feedback === 'wrong' ? 'error' : 'ok'
     );
-    setLog(text || 'Submit thành công.');
+    setLog(`[SUBMIT THÀNH CÔNG]\n\nKẾT QUẢ: ${feedback ? feedback.toUpperCase() : 'ĐÃ GHI NHẬN'}\n\nPAYLOAD GỬI ĐI (PAYLOAD):\n${JSON.stringify(submission, null, 2)}\n\nPHẢN HỒI TỪ DRES (RESPONSE BODY):\n${text || 'Submit thành công.'}`);
     setDresStatus(feedback === 'wrong'
       ? 'DRES trả về WRONG. Frame đã được đánh dấu đỏ.'
       : feedback === 'correct'
         ? 'DRES trả về CORRECT. Frame đã được đánh dấu xanh.'
         : 'Đã submit thành công. Bấm trạng thái góc phải để xem log.');
   } catch (error) {
-    setLog(error.message || String(error));
+    if (!state.lastLog.includes('[SUBMIT THẤT BẠI]')) {
+      const reason = error.message || String(error);
+      setLog(`[SUBMIT THẤT BẠI]\n\nLÝ DO (REASON):\n${reason}\n\nPAYLOAD GỬI ĐI (PAYLOAD):\n${JSON.stringify(submission, null, 2)}`);
+    }
     setStatus('Submit lỗi', 'error');
     setDresStatus('Submit DRES thất bại. Bấm trạng thái góc phải để xem log.');
   }
@@ -2583,6 +3491,7 @@ async function performSearch(requestedTemporalStageIndex = null, translatedQuery
   try {
     await clearCorrectSubmissionFeedback();
     const clientStarted = performance.now();
+    const clientSendEpoch = Date.now();
     const temporalWeights = temporal ? fusionWeightsForStage(state.stages[temporalStageIndex], {
       hasSemantic: Boolean(temporalQuery),
       hasOcr: Boolean(temporalOcrQuery),
@@ -2739,16 +3648,44 @@ async function performSearch(requestedTemporalStageIndex = null, translatedQuery
     renderResults();
     const frontendRenderMs = performance.now() - renderStarted;
     const clientTotalMs = performance.now() - clientStarted;
+    const backendTotalMs = Number(payload.timings_ms?.total_ms || 0);
+    const networkRttMs = Math.max(0, responseReceivedMs - backendTotalMs);
+    const transitUpMs = networkRttMs / 2;
+    const transitDownMs = networkRttMs / 2;
     state.lastSearchTiming = {
       clientTotalMs,
       timings: {
         ...(payload.timings_ms || {}),
+        transit_up_ms: transitUpMs,
+        transit_down_ms: transitDownMs,
         frontend_response_ms: responseReceivedMs,
         frontend_render_ms: frontendRenderMs
       },
       searchBackend: payload.search_backend,
       totalCandidates: payload.total_candidates
     };
+    console.log(
+      `%c[SEARCH LATENCY]%c ` +
+      `🛫 Đi (Client->Backend): ${transitUpMs.toFixed(1)}ms | ` +
+      `⚙️ Backend: ${backendTotalMs.toFixed(1)}ms | ` +
+      `🛬 Về (Backend->Client): ${transitDownMs.toFixed(1)}ms | ` +
+      `🔄 Tổng RTT: ${responseReceivedMs.toFixed(1)}ms`,
+      'color: #06b6d4; font-weight: bold;',
+      'color: inherit;'
+    );
+    fetch('/api/log-latency', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        user: state.memberName || state.dresUsername || 'Ẩn danh',
+        path: temporal ? '/temporal-search' : '/search',
+        transit_up_ms: transitUpMs,
+        server_ms: backendTotalMs,
+        transit_down_ms: transitDownMs,
+        rtt_ms: responseReceivedMs,
+        client_epoch: clientSendEpoch
+      })
+    }).catch(() => {});
     trackThumbnailTimings(renderStarted);
     const filterMeta = videoFilter ? ` - lọc ${normalizeVideoId(videoFilter)} trong ${payload.filtered_candidates ?? backendResults.length} frame` : '';
     els.searchTimingBtn.textContent = `Tổng thời gian: ${formatMilliseconds(clientTotalMs)}`;
@@ -2785,6 +3722,10 @@ function resetWorkspace() {
   state.similarityTextWeight = 30;
   state.asrWeight = 20;
   state.asrOnly = false;
+  if (els.globalSimilarityDropzone) {
+    els.globalSimilarityDropzone.style.padding = '12px';
+    els.globalSimilarityDropzone.innerHTML = `<strong id="globalSimilarityDropzoneText" style="color: var(--text-primary); font-size: 13px;">Thả ảnh vào đây</strong>`;
+  }
   state.temporalSessionId = null;
   state.temporalStage = 0;
   state.stages = [{id: Date.now(), name: 'Hành động A', query: '', translatedQuery: '', ocrQuery: '', asrQuery: '', ocrWeight: 41, asrWeight: 20}];
@@ -2843,6 +3784,19 @@ async function resetTemporalSearch() {
 
 document.addEventListener('pointerdown', unlockCorrectSound, {once: true});
 document.addEventListener('keydown', unlockCorrectSound, {once: true});
+
+const savedTheme = localStorage.getItem('theme') || 'light';
+if (savedTheme === 'dark') {
+  document.documentElement.setAttribute('data-theme', 'dark');
+}
+if (els.themeToggleBtn) {
+  els.themeToggleBtn.addEventListener('click', () => {
+    const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+    const newTheme = isDark ? 'light' : 'dark';
+    document.documentElement.setAttribute('data-theme', newTheme);
+    localStorage.setItem('theme', newTheme);
+  });
+}
 els.embeddingModelToggle.addEventListener('click', async () => {
   if (els.embeddingModelToggle.disabled) return;
   const previousSessionId = state.temporalSessionId;
@@ -2867,8 +3821,7 @@ els.embeddingModelToggle.addEventListener('click', async () => {
   }
   syncEmbeddingModelControls();
 });
-els.addStageBtn.addEventListener('click', addTemporalStage);
-els.resetTemporalBtn.addEventListener('click', resetTemporalSearch);
+
 els.stageList.addEventListener('keydown', event => {
   if (event.target.matches('.text-query, .similarity-query, .stage-asr-query') && event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
     event.preventDefault();
@@ -2883,19 +3836,105 @@ els.videoFilter.addEventListener('keydown', event => {
     performSearch();
   }
 });
-els.clearBtn.addEventListener('click', () => {
-  if (els.taskType.value === 'trake') clearTrakeFrames();
-  else clearMyVotes();
-});
-els.trakeSubmitBtn.addEventListener('click', submitSharedTrakeToDres);
+els.clearBtn.addEventListener('click', clearMyVotes);
+if (els.trayTabChung) {
+  els.trayTabChung.addEventListener('click', () => {
+    state.activeTrayTab = 'chung';
+    renderSelection();
+  });
+}
+if (els.trayTabTrake) {
+  els.trayTabTrake.addEventListener('click', () => {
+    state.activeTrayTab = 'trake';
+    renderSelection();
+  });
+}
+if (els.traySubmitBtn) els.traySubmitBtn.addEventListener('click', () => submit());
+if (els.trakeSubmitBtn) els.trakeSubmitBtn.addEventListener('click', () => submit());
+if (els.videoTrakeSubmitBtn) els.videoTrakeSubmitBtn.addEventListener('click', () => submit());
+if (els.videoTrakeClearBtn) els.videoTrakeClearBtn.addEventListener('click', clearTrakeFrames);
 els.resetBtn.addEventListener('click', resetWorkspace);
 els.taskType.addEventListener('change', renderTaskControls);
-els.submissionModeToggle.addEventListener('click', toggleSubmissionMode);
-els.qaSubmitBtn.addEventListener('click', submitQaAnswerToDres);
+
+// Global Similarity Dropzone Logic
+els.globalSimilarityBtn.addEventListener('click', () => {
+  const isExpanded = els.globalSimilarityBtn.getAttribute('aria-expanded') === 'true';
+  els.globalSimilarityBtn.setAttribute('aria-expanded', !isExpanded);
+  els.globalSimilarityBtn.classList.toggle('is-active', !isExpanded);
+  els.globalSimilarityPopover.hidden = isExpanded;
+});
+
+
+
+els.globalSimilarityQuery.addEventListener('input', () => {
+  state.similarityQuery = els.globalSimilarityQuery.value;
+});
+els.globalSimilarityQuery.addEventListener('keydown', event => {
+  if (event.key === 'Enter' && !event.isComposing) {
+    event.preventDefault();
+    performSearch(0);
+  }
+});
+
+els.globalSimilarityWeight.addEventListener('input', () => {
+  const weight = Number(els.globalSimilarityWeight.value);
+  state.similarityTextWeight = weight;
+  els.globalSimilarityWeightValue.textContent = weight;
+  els.globalSimilarityImageWeightValue.textContent = 100 - weight;
+});
+
+els.globalSimilarityDropzone.addEventListener('dragover', event => {
+  event.preventDefault();
+  els.globalSimilarityDropzone.style.borderColor = 'var(--text-primary)';
+  els.globalSimilarityDropzone.style.backgroundColor = 'var(--bg-surface-hover)';
+});
+els.globalSimilarityDropzone.addEventListener('dragleave', () => {
+  els.globalSimilarityDropzone.style.borderColor = 'var(--border-subtle)';
+  els.globalSimilarityDropzone.style.backgroundColor = 'transparent';
+});
+els.globalSimilarityDropzone.addEventListener('drop', event => {
+  event.preventDefault();
+  els.globalSimilarityDropzone.style.borderColor = 'var(--border-subtle)';
+  els.globalSimilarityDropzone.style.backgroundColor = 'transparent';
+  try {
+    const item = JSON.parse(event.dataTransfer.getData('application/x-aic-keyframe'));
+    setSimilarityItem(item);
+  } catch {
+    showError('Frame ném vào không hợp lệ.');
+  }
+});
+
+// Selection Tray Dropzone Logic (Tìm kiếm tương tự khi thả vào khay)
+els.selectionTray.addEventListener('dragover', event => {
+  event.preventDefault();
+  els.selectionTray.classList.add('is-dragover');
+});
+els.selectionTray.addEventListener('dragleave', () => {
+  els.selectionTray.classList.remove('is-dragover');
+});
+els.selectionTray.addEventListener('drop', event => {
+  event.preventDefault();
+  els.selectionTray.classList.remove('is-dragover');
+  try {
+    const item = JSON.parse(event.dataTransfer.getData('application/x-aic-keyframe'));
+    setSimilarityItem(item);
+  } catch {
+    showError('Frame ném vào không hợp lệ.');
+  }
+});
+
+els.submissionModeToggle.addEventListener('click', (e) => {
+  const target = e.target.closest('[data-mode]');
+  if (target && target.dataset.mode === 'dres' && state.submissionMode === 'dres') {
+    openDresModal();
+    return;
+  }
+  toggleSubmissionMode();
+});
 els.qaAnswer.addEventListener('keydown', event => {
   if (event.key === 'Enter' && !event.isComposing) {
     event.preventDefault();
-    submitQaAnswerToDres();
+    submit(null, 'qa');
   }
 });
 els.connectionStatus.addEventListener('click', openLogModal);
@@ -2904,6 +3943,9 @@ document.querySelector('[data-close-log]').addEventListener('click', closeLogMod
 els.searchTimingBtn.addEventListener('click', openTimingModal);
 els.closeTimingBtn.addEventListener('click', closeTimingModal);
 document.querySelector('[data-close-timing]').addEventListener('click', closeTimingModal);
+if (els.shortcutsBtn) els.shortcutsBtn.addEventListener('click', openShortcutsModal);
+if (els.closeShortcutsBtn) els.closeShortcutsBtn.addEventListener('click', closeShortcutsModal);
+document.querySelector('[data-close-shortcuts]')?.addEventListener('click', closeShortcutsModal);
 els.dresOpenBtn.addEventListener('click', openDresModal);
 els.closeDresBtn.addEventListener('click', closeDresModal);
 document.querySelector('[data-close-dres]').addEventListener('click', closeDresModal);
@@ -2929,7 +3971,11 @@ document.querySelector('[data-close-frame-overview]').addEventListener('click', 
 els.closeVideoBtn.addEventListener('click', closeVideo);
 document.querySelector('[data-close-video]').addEventListener('click', closeVideo);
 els.captureFrameBtn.addEventListener('click', captureDisplayedFrame);
-els.videoSubmitCurrentBtn.addEventListener('click', submitDisplayedFrameToDres);
+if (els.videoAddTrakeBtn) els.videoAddTrakeBtn.addEventListener('click', captureDisplayedFrameToTrake);
+els.videoSubmitCurrentBtn.addEventListener('click', () => {
+  const item = getDisplayedVideoFrameItem();
+  if (item) submit(item);
+});
 els.videoBackBtn.addEventListener('click', () => seekVideoToSeconds((els.player.currentTime || 0) - 5, true));
 els.videoPlayBtn.addEventListener('click', () => {
   if (els.player.paused) {
@@ -2987,6 +4033,97 @@ els.player.addEventListener('play', updateVideoControls);
 els.player.addEventListener('pause', updateVideoControls);
 els.player.addEventListener('volumechange', updateVideoControls);
 document.addEventListener('keydown', event => {
+  const inInput = event.target.matches('input, textarea');
+  const key = event.key.toLowerCase();
+
+  // Shift + K / T / Q (when not actively typing text inside an input or textarea)
+  if (!inInput && event.shiftKey && !event.ctrlKey && !event.altKey && !event.metaKey) {
+    if (key === 'k') {
+      event.preventDefault();
+      setTaskType('kis');
+      return;
+    }
+    if (key === 't') {
+      event.preventDefault();
+      setTaskType('trake');
+      return;
+    }
+    if (key === 'q') {
+      event.preventDefault();
+      setTaskType('qa');
+      return;
+    }
+  }
+
+  // Alt-key combinations work even when typing inside an input field
+  if (event.altKey && !event.ctrlKey && !event.metaKey) {
+    if (key === '1' || key === 'k') {
+      event.preventDefault();
+      setTaskType('kis');
+      return;
+    }
+    if (key === '2' || key === 't') {
+      event.preventDefault();
+      setTaskType('trake');
+      return;
+    }
+    if (key === '3' || key === 'q') {
+      event.preventDefault();
+      setTaskType('qa');
+      return;
+    }
+  }
+
+  if (inInput) return;
+
+  // Single-key shortcuts when NOT typing in text inputs
+  if (key === '1') {
+    event.preventDefault();
+    setTaskType('kis');
+    return;
+  }
+  if (key === '2') {
+    event.preventDefault();
+    setTaskType('trake');
+    return;
+  }
+  if (key === '3') {
+    event.preventDefault();
+    setTaskType('qa');
+    return;
+  }
+  if (key === 't') {
+    event.preventDefault();
+    cycleTaskType();
+    return;
+  }
+  
+  if (key === 'i') {
+    event.preventDefault();
+    els.globalSimilarityBtn.click();
+    return;
+  }
+  if (key === 'a') {
+    event.preventDefault();
+    addTemporalStage();
+    return;
+  }
+  if (key === 'd') {
+    event.preventDefault();
+    if (state.stages.length > 1) {
+      removeStage(state.stages[state.stages.length - 1].id);
+    }
+    return;
+  }
+  if (event.key === '?' || (event.key === '/' && event.shiftKey)) {
+    event.preventDefault();
+    if (els.shortcutsModal && !els.shortcutsModal.hidden) {
+      closeShortcutsModal();
+    } else {
+      openShortcutsModal();
+    }
+    return;
+  }
   if (event.key === 'Escape' && !els.correctCelebration.hidden) {
     event.preventDefault();
     event.stopPropagation();
@@ -3015,6 +4152,12 @@ document.addEventListener('keydown', event => {
     return;
   }
   if (event.key !== 'Escape') return;
+  if (els.shortcutsModal && !els.shortcutsModal.hidden) {
+    event.preventDefault();
+    event.stopPropagation();
+    closeShortcutsModal();
+    return;
+  }
   if (!els.dresModal.hidden) {
     event.preventDefault();
     event.stopPropagation();
@@ -3076,3 +4219,64 @@ refreshIcons();
 if (!state.dresSessionId && state.submissionMode === 'dres') {
   window.setTimeout(openDresModal, 150);
 }
+
+
+els.qaAnswer.addEventListener('input', () => {
+  if (state.activeQueryFilename) {
+    state.userDrafts[state.activeQueryFilename] = els.qaAnswer.value;
+    clearTimeout(state.draftDebounceTimer);
+    state.draftDebounceTimer = setTimeout(() => {
+      syncUserProfile({
+        active_query_for_draft: state.activeQueryFilename,
+        draft_qa_answer: els.qaAnswer.value
+      });
+    }, 600);
+  }
+});
+els.memberNameBtn?.addEventListener('click', openDresModal);
+els.statsOpenBtn?.addEventListener('click', openStatsModal);
+els.closeStatsBtn?.addEventListener('click', closeStatsModal);
+document.querySelector('[data-close-stats]')?.addEventListener('click', closeStatsModal);
+els.statsTabPersonal?.addEventListener('click', () => {
+  els.statsTabPersonal.classList.add('is-active');
+  els.statsTabTeamHistory?.classList.remove('is-active');
+  els.statsTabLeaderboard.classList.remove('is-active');
+  els.statsPersonalView.hidden = false;
+  if (els.statsTeamHistoryView) els.statsTeamHistoryView.hidden = true;
+  els.statsLeaderboardView.hidden = true;
+});
+els.statsTabTeamHistory?.addEventListener('click', () => {
+  els.statsTabPersonal.classList.remove('is-active');
+  els.statsTabTeamHistory.classList.add('is-active');
+  els.statsTabLeaderboard.classList.remove('is-active');
+  els.statsPersonalView.hidden = true;
+  els.statsTeamHistoryView.hidden = false;
+  els.statsLeaderboardView.hidden = true;
+});
+els.statsTabLeaderboard?.addEventListener('click', () => {
+  els.statsTabPersonal.classList.remove('is-active');
+  els.statsTabTeamHistory?.classList.remove('is-active');
+  els.statsTabLeaderboard.classList.add('is-active');
+  els.statsPersonalView.hidden = true;
+  if (els.statsTeamHistoryView) els.statsTeamHistoryView.hidden = true;
+  els.statsLeaderboardView.hidden = false;
+});
+if (!state.viewingHeartbeatTimer) {
+  state.viewingHeartbeatTimer = window.setInterval(() => {
+    if (state.activeQueryFilename) sendViewingStatus();
+  }, 20000);
+}
+
+document.getElementById('sessionChangeNameBtn')?.addEventListener('click', promptChangeMemberName);
+
+document.getElementById('clearStatsBtn')?.addEventListener('click', async () => {
+  if (!confirm('Bạn có chắc chắn muốn xóa toàn bộ lịch sử nộp bài và đặt lại bảng xếp hạng về 0?')) return;
+  try {
+    const resp = await fetch('/team/user/stats/clear', { method: 'POST' });
+    if (resp.ok) {
+      openStatsModal();
+    }
+  } catch (err) {
+    alert('Lỗi khi xóa: ' + err.message);
+  }
+});
