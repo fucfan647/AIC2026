@@ -18,14 +18,19 @@ pip install fastapi uvicorn websockets httpx
 ```
 
 ### Bước 2: Tải mã nguồn về máy cá nhân
-Chỉ cần tải thư mục `system/frontend` và các file `.bat` về máy (rất nhẹ, khoảng **350 KB**):
+Chỉ cần tải file zip **`aic_client_member.zip`** (siêu nhẹ, chỉ **80 KB**) về máy và giải nén ra:
 ```
-my_aic_client/
+aic_client/
 ├── frontend/
 │   ├── serve_frontend.py
-│   └── ... (các file html/js/css)
+│   ├── app.js
+│   ├── index.html
+│   ├── styles.css
+│   └── video_fps.json
 ├── start_option1_member.bat
-└── start_option2_member.bat
+├── start_option2_member.bat
+├── start_option1_host.bat
+└── HUONG_DAN_TEST_2_OPTION.md
 ```
 
 ### Bước 3: Chép ảnh Keyframes vào ổ SSD máy mình
