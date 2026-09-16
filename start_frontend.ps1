@@ -1,20 +1,48 @@
-# Start AIC2026 Frontend Server
-$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-Set-Location "$ScriptDir\frontend"
+param(
+    [string]$ConfigPath = (Join-Path $PSScriptRoot "system.config.json"),
+    [switch]$SkipCheck
+)
 
+$ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot "scripts\system_common.ps1")
+
+if (-not $SkipCheck) {
+    & (Join-Path $PSScriptRoot "check_system.ps1") -Scope Frontend -ConfigPath $ConfigPath
+}
+$config = Read-AicSystemConfig -ConfigPath $ConfigPath
+$python = Get-AicPythonExecutable -Config $config
+
+$env:HLS_SERVER_URL = [string]$config.frontend.hls_server_url
+$env:TRANSLATOR_URL = [string]$config.frontend.translator_url
+$env:SUBMISSION_SOUND_ROOT = Resolve-AicSystemPath -Value ([string]$config.paths.music_root)
+
+$arguments = @(
+    "-u", "serve_frontend.py",
+    "--host", [string]$config.frontend.host,
+    "--port", [string]$config.frontend.port,
+    "--backend-url", [string]$config.frontend.backend_url,
+    "--hls-server-url", [string]$config.frontend.hls_server_url,
+    "--records-path", (Resolve-AicSystemPath -Value ([string]$config.paths.records_db)),
+    "--deleted-manifest", (Resolve-AicSystemPath -Value ([string]$config.paths.deleted_manifest)),
+    "--query-root", (Resolve-AicSystemPath -Value ([string]$config.paths.query_root)),
+    "--keyframe-root", (Resolve-AicSystemPath -Value ([string]$config.paths.keyframes_root)),
+    "--thumbnail-root", (Resolve-AicSystemPath -Value ([string]$config.paths.thumbnails_root))
+)
+
+$browserUrl = "http://127.0.0.1:$($config.frontend.port)/"
 Write-Host "============================================================" -ForegroundColor Green
-Write-Host "  Starting AIC2026 Frontend (FastAPI:8080)..." -ForegroundColor Green
+Write-Host " AIC2026 Frontend: $browserUrl" -ForegroundColor Green
+Write-Host " Backend proxy:    $($config.frontend.backend_url)" -ForegroundColor Cyan
 Write-Host "============================================================" -ForegroundColor Green
 
-# Cau hinh thu muc keyframes tren may local (o cung ca nhan)
-$KeyframesDir = "D:\keyframes_AIC_2026"
-$BackendUrl = "http://192.168.20.156:8036"
-$HlsUrl = "http://192.168.20.156:8052"
+if ([bool]$config.frontend.open_browser) {
+    Start-Process $browserUrl
+}
 
-python -u serve_frontend.py `
-  --host 0.0.0.0 `
-  --port 8080 `
-  --backend-url "$BackendUrl" `
-  --hls-server-url "$HlsUrl" `
-  --keyframes-dir "$KeyframesDir"
-
+Push-Location (Join-Path $PSScriptRoot "frontend")
+try {
+    & $python @arguments
+    if ($LASTEXITCODE -ne 0) { throw "Frontend exited with code $LASTEXITCODE" }
+} finally {
+    Pop-Location
+}

@@ -56,8 +56,6 @@ backend/embeddings.npy
 *.sqlite3
 *.db
 *.jsonl
-backend/artifacts/
-artifacts/
 
 # --- Milvus Database Data & Storage ---
 milvus_data/

@@ -202,7 +202,7 @@ frontend/
 | :--- | :--- | :--- |
 | **Model Weights** | `*.pth`, `*.pt`, `*.bin`, `*.onnx`, `*.safetensors`, `*.ckpt` | Dung lượng rất lớn (>1.3GB/file) |
 | **Embeddings** | `*.npy`, `*.npz`, `backend/embeddings.npy`, `merged_beit3_large_numeric/` | Mảng vector nhị phân lớn (>700MB) |
-| **Databases & Indexes** | `*.sqlite`, `*.sqlite3`, `*.db`, `*.jsonl`, `backend/artifacts/` | Cơ sở dữ liệu metadata và text OCR (>250MB) |
+| **Databases & Indexes** | `*.sqlite`, `*.sqlite3`, `*.db`, `*.jsonl` | Cơ sở dữ liệu metadata và text OCR (>250MB); các JSON cấu hình nhỏ vẫn được lưu trong Git |
 | **Datasets & Videos** | `data/`, `keyframes/`, `synthetic_frames/`, `*.mp4`, `*.ts`, `*.m3u8` | Bộ dữ liệu video cuộc thi gốc |
 | **Audio & Media** | `backend/music/`, `*.mp3`, `*.wav`, `*.flac` | File nhạc hiệu ứng cục bộ |
 | **Submissions & Zip** | `*.zip`, `submission/`, `frontend/submission/` | File kết quả nộp bài sinh ra khi thi đấu |
@@ -232,15 +232,63 @@ pip install -r requirements.txt
 
 ### Cách 1: Khởi chạy 1-Click bằng PowerShell (Khuyên dùng)
 
-Hệ thống đã chuẩn bị sẵn 2 script PowerShell tự động nhận diện đường dẫn và tham số tối ưu:
+Mọi đường dẫn, cổng, model và tính năng quan trọng nằm trong `system.config.json`. Đường dẫn tương đối được tính từ thư mục `system`, vì vậy mỗi thành viên chỉ cần sửa một file sau khi tải model và dữ liệu về.
+
+#### Cấu hình đường dẫn keyframe và thumbnail
+
+Tên thư mục dữ liệu không bị cố định và không bắt buộc phải là `synthetic_frames`:
+
+- `paths.keyframes_root`: thư mục gốc chứa ảnh đầy đủ.
+- `paths.thumbnails_root`: thư mục gốc chứa thumbnail.
+- Hai đường dẫn có thể giống nhau, khác thư mục hoặc nằm trên hai ổ đĩa khác nhau.
+- Keyframe ưu tiên `.jpg`; thumbnail ưu tiên `.webp`. Cả hai route vẫn đọc được `.jpg`, `.jpeg`, `.webp` và `.png`.
+- Cấu trúc bên dưới mỗi thư mục là `<video_id>/<frame_number>.<extension>`, ví dụ `L21_V001/001.jpg`.
+
+Ví dụ dùng hai thư mục riêng:
+
+```json
+"keyframes_root": "F:/datasets/aic/full_images",
+"thumbnails_root": "D:/aic_cache/thumbnails_webp"
+```
+
+Nếu chưa tạo thumbnail riêng, cho hai giá trị trỏ tới cùng một thư mục:
+
+```json
+"keyframes_root": "F:/datasets/aic/frames",
+"thumbnails_root": "F:/datasets/aic/frames"
+```
+
+Kiểm tra trước khi chạy:
+
+```powershell
+.\check_system.ps1
+```
+
+Script sẽ kiểm tra source, model, embedding, database, frame, thư viện Python và CUDA. Asset của tính năng đang tắt được bỏ qua; `excluded_rows` và dữ liệu chỉ phục vụ frontend được báo là tùy chọn.
+
+Ba chế độ khởi động:
 
 1. **Khởi động Backend AI Engine**:
-   * Chuột phải vào [`start_backend.ps1`](file:///d:/Folder/AICHALLENGE2026/system/start_backend.ps1) chọn **Run with PowerShell** (hoặc mở PowerShell gõ `.\start_backend.ps1`).
+   * Chạy `.\start_backend.ps1`.
    * *Backend sẽ khởi động tại địa chỉ `http://127.0.0.1:8036` trên GPU CUDA.*
 
 2. **Khởi động Frontend Gateway & Web UI**:
-   * Chuột phải vào [`start_frontend.ps1`](file:///d:/Folder/AICHALLENGE2026/system/start_frontend.ps1) chọn **Run with PowerShell** (hoặc mở PowerShell gõ `.\start_frontend.ps1`).
+   * Chạy `.\start_frontend.ps1`.
    * *Frontend Web sẽ mở tại địa chỉ `http://127.0.0.1:8080`.*
+
+3. **Khởi động toàn hệ thống**:
+   * Chạy `.\start_system.ps1`.
+   * Backend mở trong cửa sổ PowerShell riêng; frontend chạy ở cửa sổ hiện tại. Khi frontend dừng, backend do script này tạo cũng được dừng.
+
+Nếu dùng virtual environment, đặt đường dẫn trong config, ví dụ:
+
+```json
+"runtime": {
+  "python_executable": ".venv/Scripts/python.exe"
+}
+```
+
+Mặc định `features.ppocr` đang là `false` vì gói source hiện tại chưa có `paddle_ocr.sqlite`. Sau khi tải index PP-OCR, sửa `paths.ppocr_index` và chuyển cờ này thành `true`.
 
 ---
 

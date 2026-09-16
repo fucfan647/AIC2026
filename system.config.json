@@ -1,0 +1,66 @@
+{
+  "runtime": {
+    "python_executable": "python"
+  },
+  "paths": {
+    "keyframes_root": "../data/synthetic_frames",
+    "thumbnails_root": "../data/synthetic_frames",
+    "records_db": "backend/artifacts/current_index/records.sqlite",
+    "video_ranges": "backend/artifacts/current_index/video_ranges.json",
+    "index_config": "backend/artifacts/current_index/index_config.json",
+    "metaclip_embeddings": "backend/embeddings.npy",
+    "beit3_embeddings": "merged_beit3_large_numeric/embeddings.npy",
+    "beit3_checkpoint": "beit3_runtime/beit3_large_itc_patch16_224.pth",
+    "beit3_sentencepiece": "beit3_runtime/beit3.spm",
+    "beit3_runtime_python": "beit3_runtime/python",
+    "ppocr_index": "backend/artifacts/current_index/paddle_ocr.sqlite",
+    "monkey_ocr_index": "backend/artifacts/current_index/monkey_ocr.sqlite",
+    "asr_index": "backend/artifacts/asr_index/asr.sqlite",
+    "excluded_rows": "frames_deleted/moved_frame_rows.npy",
+    "deleted_manifest": "backend/artifacts/current_index/active_deleted_manifest.jsonl",
+    "query_root": "backend/query_BTC",
+    "music_root": "backend/music"
+  },
+  "features": {
+    "beit3": true,
+    "ppocr": false,
+    "monkey_ocr": true,
+    "asr": true,
+    "temporal_search": true
+  },
+  "backend": {
+    "host": "127.0.0.1",
+    "port": 8036,
+    "device": "cuda",
+    "gpu_dtype": "float16",
+    "search_backend": "torch-gpu",
+    "storage_backend": "file",
+    "model_name": "facebook/metaclip-2-worldwide-b16-384",
+    "local_files_only": false,
+    "lazy_load": false,
+    "nginx_accel_redirect": false,
+    "beit3_max_text_length": 64,
+    "metaclip_weight": 0.59,
+    "ocr_weight": 0.41,
+    "asr_weight": 0.0,
+    "milvus_host": "127.0.0.1",
+    "milvus_port": 19533,
+    "milvus_collection": "synthetic_metaclip2_backend_store_v1",
+    "beit3_milvus_collection": "synthetic_beit3_large_backend_store_v1",
+    "temporal_stage1_top_k": 200,
+    "temporal_local_top_k": 200,
+    "temporal_stage2_keep_k": 200,
+    "temporal_output_top_k": 200,
+    "temporal_window_ms": 300000,
+    "temporal_session_ttl_seconds": 1800,
+    "temporal_max_sessions": 64
+  },
+  "frontend": {
+    "host": "0.0.0.0",
+    "port": 8080,
+    "backend_url": "http://127.0.0.1:8036",
+    "hls_server_url": "http://127.0.0.1:8052",
+    "translator_url": "http://127.0.0.1:8031",
+    "open_browser": false
+  }
+}
