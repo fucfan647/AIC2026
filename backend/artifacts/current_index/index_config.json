@@ -1,0 +1,18 @@
+{
+  "created_at_utc": "2026-08-04T13:13:45.017519+00:00",
+  "source_metadata": "/GuestShare_NAS/WorkingSpace/Personal/nghiadq/merged_metaclip2_numeric/metadata.json",
+  "source_frame_index": "/GuestShare_NAS/WorkingSpace/Personal/nghiadq/merged_metaclip2_numeric/frame_index.jsonl",
+  "source_shot_index": "/GuestShare_NAS/WorkingSpace/Personal/nghiadq/merged_metaclip2_numeric/shot_index.jsonl",
+  "embeddings_path": "/GuestShare_NAS/WorkingSpace/Personal/nghiadq/merged_metaclip2_numeric/embeddings.npy",
+  "records_sqlite": "/GuestShare_NAS/WorkingSpace/Personal/nghiadq/synthetic_metaclip2_backend/artifacts/current_index/records.sqlite",
+  "video_ranges": "/GuestShare_NAS/WorkingSpace/Personal/nghiadq/synthetic_metaclip2_backend/artifacts/current_index/video_ranges.json",
+  "frames_root": "/GuestShare_NAS/WorkingSpace/Personal/nghiadq/synthetic_frames",
+  "model_name": "facebook/metaclip-2-worldwide-b16-384",
+  "embedding_dim": 512,
+  "embedding_dtype": "float32",
+  "num_vectors": 377859,
+  "num_metadata": 377859,
+  "video_count": 873,
+  "sample_verified_images": 1024,
+  "shot_bounds_loaded": 115192
+}

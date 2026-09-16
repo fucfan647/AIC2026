@@ -7,6 +7,7 @@ try:
     import fcntl
 except ImportError:
     fcntl = None
+import httpx
 import json
 import mimetypes
 import os
@@ -24,7 +25,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 
 
 FRONTEND_DIR = Path(__file__).resolve().parent
@@ -36,13 +37,32 @@ QUERY_ROOT = (
     else FRONTEND_DIR.parent / "query_demo"
 )
 CSV_SUBMISSION_ROOT = FRONTEND_DIR / "submission"
+USER_PROFILES_PATH = FRONTEND_DIR / "runtime" / "user_profiles.json"
+SUBMISSION_LOG_PATH = FRONTEND_DIR / "runtime" / "submission_log.json"
+SUBMISSION_ACTIVITY_CSV_PATH = FRONTEND_DIR / "runtime" / "submission_activity.csv"
 HLS_ROOT = Path("/mlcv1/Datasets/HCMAI25/streaming/hls")
 DEFAULT_RECORDS_PATH = (
     FRONTEND_DIR.parent
     / "backend/artifacts/current_index/records.sqlite"
 )
 DEFAULT_DELETED_MANIFEST = FRONTEND_DIR.parent / "frames_deleted/active_deleted_manifest.jsonl"
-SUBMISSION_SOUND_ROOT = FRONTEND_DIR.parent / "backend/src"
+def resolve_submission_sound_root() -> Path:
+    env_path = os.getenv("SUBMISSION_SOUND_ROOT")
+    if env_path and Path(env_path).is_dir():
+        return Path(env_path)
+    candidates = [
+        FRONTEND_DIR.parent / "backend" / "music",
+        FRONTEND_DIR / "music",
+        FRONTEND_DIR.parent / "backend" / "src",
+        Path(r"D:\Folder\AICHALLENGE2026\system\backend\music"),
+    ]
+    for cand in candidates:
+        if cand.is_dir():
+            return cand
+    return FRONTEND_DIR.parent / "backend" / "music"
+
+
+SUBMISSION_SOUND_ROOT = resolve_submission_sound_root()
 SUBMISSION_SOUND_SUFFIXES = {".aac", ".flac", ".m4a", ".mp3", ".ogg", ".wav"}
 FORWARDED_HEADERS = ("Content-Type", "Range", "Accept", "User-Agent")
 QUERY_FILENAME_PATTERN = re.compile(r"^query-(.+)-(kis|qa|trake)\.txt$", re.IGNORECASE)
@@ -70,6 +90,75 @@ def empty_team_state() -> Dict[str, Any]:
         "active_query": "",
         "submission_counts": {},
     }
+
+
+def normalize_user_key(name: str) -> str:
+    return re.sub(r"\s+", " ", str(name or "").strip()).lower()
+
+
+def read_user_profiles(path: Path = USER_PROFILES_PATH) -> Dict[str, Any]:
+    if not path.is_file():
+        return {}
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def write_user_profiles(profiles: Dict[str, Any], path: Path = USER_PROFILES_PATH) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_suffix(".tmp")
+    with tmp_path.open("w", encoding="utf-8") as f:
+        json.dump(profiles, f, ensure_ascii=False, indent=2)
+    tmp_path.replace(path)
+
+
+
+
+
+def read_submission_log(path: Path = SUBMISSION_LOG_PATH) -> List[Dict[str, Any]]:
+    if SUBMISSION_ACTIVITY_CSV_PATH.is_file():
+        try:
+            csv_text = SUBMISSION_ACTIVITY_CSV_PATH.read_text(encoding="utf-8").strip()
+            csv_lines = [line for line in csv_text.splitlines() if line.strip()]
+            if len(csv_lines) <= 1:
+                # User cleared submission_activity.csv! Auto-sync submission_log.json and reset profiles!
+                if path.is_file():
+                    path.write_text("[]", encoding="utf-8")
+                if USER_PROFILES_PATH.is_file():
+                    try:
+                        profs = json.loads(USER_PROFILES_PATH.read_text(encoding="utf-8"))
+                        for p in profs.values():
+                            if isinstance(p, dict):
+                                p["total_submissions"] = 0
+                        USER_PROFILES_PATH.write_text(json.dumps(profs, ensure_ascii=False, indent=2), encoding="utf-8")
+                    except Exception:
+                        pass
+                return []
+        except Exception:
+            pass
+    if not path.is_file():
+        return []
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, list) else []
+    except Exception:
+        return []
+
+
+def append_submission_log(record: Dict[str, Any], path: Path = SUBMISSION_LOG_PATH) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    logs = read_submission_log(path)
+    logs.append(record)
+    if len(logs) > 2000:
+        logs = logs[-2000:]
+    tmp_path = path.with_suffix(".tmp")
+    with tmp_path.open("w", encoding="utf-8") as f:
+        json.dump(logs, f, ensure_ascii=False, indent=2)
+    tmp_path.replace(path)
 
 
 def query_sort_key(filename: str) -> List[Tuple[int, Any]]:
@@ -288,18 +377,21 @@ def select_frame_context(
     frames: List[Dict[str, Any]],
     timestamp_ms: int,
     *,
-    count: int = 48,
+    count: int = 49,
+    before: int = 24,
+    after: int = 24,
 ) -> List[Dict[str, Any]]:
-    if not frames or count < 1 or count > 96:
+    if not frames:
         return []
     center_index = min(
         range(len(frames)),
         key=lambda index: abs(int(frames[index]["timestamp_ms"]) - timestamp_ms),
     )
-    selected_size = min(count, len(frames))
-    start = max(0, min(center_index - count // 2, len(frames) - selected_size))
-    selected = [dict(frame) for frame in frames[start:start + selected_size]]
-    selected[center_index - start]["is_current"] = True
+    start = max(0, center_index - before)
+    end = min(len(frames), center_index + after + 1)
+    selected = [dict(frame) for frame in frames[start:end]]
+    if 0 <= center_index - start < len(selected):
+        selected[center_index - start]["is_current"] = True
     return selected
 
 
@@ -363,6 +455,7 @@ def read_team_state(path: Path = TEAM_STATE_PATH) -> Dict[str, Any]:
     state.setdefault("submission_feedback", {})
     state.setdefault("active_query", "")
     state.setdefault("submission_counts", {})
+
     for vote in state["votes"]:
         if not vote.get("selection_id"):
             item = vote.get("item", {})
@@ -385,6 +478,8 @@ def write_team_state(state: Dict[str, Any], path: Path = TEAM_STATE_PATH) -> Non
 class TeamSocketHub:
     def __init__(self) -> None:
         self._clients: set[WebSocket] = set()
+        self._viewers: Dict[str, Dict[str, Any]] = {}
+        self._ws_to_client: Dict[WebSocket, str] = {}
 
     async def connect(self, websocket: WebSocket) -> None:
         await websocket.accept()
@@ -392,6 +487,56 @@ class TeamSocketHub:
 
     def disconnect(self, websocket: WebSocket) -> None:
         self._clients.discard(websocket)
+        client_id = self._ws_to_client.pop(websocket, None)
+        if client_id and client_id in self._viewers:
+            self._viewers.pop(client_id, None)
+
+    def update_viewer(
+        self,
+        client_id: str,
+        name: str,
+        filename: str,
+        websocket: Optional[WebSocket] = None,
+    ) -> None:
+        if not client_id:
+            return
+        if websocket is not None:
+            self._ws_to_client[websocket] = client_id
+        clean_name = str(name).strip()
+        clean_filename = str(filename).strip()
+        if not clean_name or not clean_filename:
+            self._viewers.pop(client_id, None)
+            return
+        self._viewers[client_id] = {
+            "name": clean_name,
+            "filename": clean_filename,
+            "updated_at": time.time(),
+        }
+
+    def get_query_viewers(self) -> Dict[str, List[str]]:
+        now = time.time()
+        stale = [
+            cid for cid, item in self._viewers.items()
+            if now - float(item.get("updated_at", 0)) > 180
+        ]
+        for cid in stale:
+            self._viewers.pop(cid, None)
+
+        grouped: Dict[str, List[str]] = {}
+        for item in self._viewers.values():
+            fn = str(item.get("filename", "")).strip()
+            name = str(item.get("name", "")).strip()
+            if fn and name:
+                names = grouped.setdefault(fn, [])
+                if name not in names:
+                    names.append(name)
+        return grouped
+
+    async def broadcast_viewers(self) -> None:
+        await self.broadcast({
+            "type": "viewers_update",
+            "viewers": self.get_query_viewers(),
+        })
 
     async def broadcast(self, state: Dict[str, Any]) -> None:
         stale_clients = []
@@ -465,7 +610,13 @@ def create_app(
     query_root: Path = QUERY_ROOT,
     csv_submission_root: Path = CSV_SUBMISSION_ROOT,
     hls_server_url: str = os.getenv("HLS_SERVER_URL", "http://127.0.0.1:8052"),
+    keyframe_root: Optional[Path] = None,
+    thumbnail_root: Optional[Path] = None,
 ) -> FastAPI:
+    if keyframe_root is not None and not keyframe_root.is_dir():
+        raise FileNotFoundError(f"Local keyframe root not found: {keyframe_root}")
+    if thumbnail_root is not None and not thumbnail_root.is_dir():
+        raise FileNotFoundError(f"Local thumbnail root not found: {thumbnail_root}")
     translator_url = os.getenv("TRANSLATOR_URL", "http://127.0.0.1:8031")
     video_path_by_id: Dict[str, str] = {}
     shot_frames_by_video: Dict[str, List[Dict[str, Any]]] = {}
@@ -656,7 +807,7 @@ def create_app(
         return {"frames": frames, "returned": len(frames), "window_size": 24}
 
     @app.get("/frame-context/{video_id}")
-    async def frame_context(video_id: str, timestamp_ms: int, count: int = 48):
+    async def frame_context(video_id: str, timestamp_ms: int, count: int = 49):
         if not metadata_ready.is_set():
             raise HTTPException(status_code=503, detail="Frame metadata is loading")
         frames = select_frame_context(frames_by_video.get(video_id, []), timestamp_ms, count=count)
@@ -664,16 +815,14 @@ def create_app(
             raise HTTPException(status_code=404, detail="Synthetic frame metadata not found")
         return {"frames": frames, "returned": len(frames), "window_size": count}
 
-    LOCAL_KEYFRAME_ROOTS = [
-        Path(r"D:\AICHALLENGE2026\keyframes_AIC_2026\synthetic_frames\synthetic_frames"),
-        Path(r"D:\AICHALLENGE2026\keyframes_AIC_2026\synthetic_frames"),
-        Path(r"D:\AICHALLENGE2026\keyframes_AIC_2026"),
-        Path(r"D:\keyframes_AIC_2026\synthetic_frames\synthetic_frames"),
-        Path(r"D:\keyframes_AIC_2026\synthetic_frames"),
-        Path(r"D:\keyframes_AIC_2026"),
-    ]
+    local_keyframe_roots = (keyframe_root,) if keyframe_root is not None else ()
+    local_thumbnail_roots = (thumbnail_root,) if thumbnail_root is not None else ()
 
-    def resolve_local_keyframe_file(keyframe_id: str) -> Optional[Path]:
+    def resolve_local_image_file(
+        keyframe_id: str,
+        roots: Tuple[Path, ...],
+        suffixes: Tuple[str, ...],
+    ) -> Optional[Path]:
         raw = urllib.parse.unquote(str(keyframe_id)).strip()
         if not raw:
             return None
@@ -683,47 +832,57 @@ def create_app(
             video_id, frame_idx = parts[0], parts[1]
             try:
                 num = int(frame_idx)
-                names = [f"{num:03d}.jpg", f"{num}.jpg", f"{frame_idx}.jpg", f"{frame_idx}.jpeg"]
+                names = list(dict.fromkeys(
+                    name
+                    for suffix in suffixes
+                    for name in (f"{num:03d}{suffix}", f"{num}{suffix}", f"{frame_idx}{suffix}")
+                ))
             except ValueError:
-                names = [f"{frame_idx}.jpg", f"{frame_idx}.jpeg"]
-            for root in LOCAL_KEYFRAME_ROOTS:
-                if not root.is_dir():
-                    continue
+                names = [f"{frame_idx}{suffix}" for suffix in suffixes]
+            for root in roots:
                 for name in names:
                     target = root / video_id / name
                     if target.is_file():
                         return target
-        for root in LOCAL_KEYFRAME_ROOTS:
-            if not root.is_dir():
-                continue
-            p = root / raw
-            if p.is_file():
-                return p
-            if (root / f"{raw}.jpg").is_file():
-                return root / f"{raw}.jpg"
+        for root in roots:
+            candidates = [root / raw, *(root / f"{stem}{suffix}" for suffix in suffixes)]
+            for candidate in candidates:
+                try:
+                    candidate.resolve().relative_to(root.resolve())
+                except ValueError:
+                    continue
+                if candidate.is_file():
+                    return candidate
         return None
 
     @app.get("/keyframe/{keyframe_id:path}")
     async def keyframe(keyframe_id: str, request: Request):
         if keyframe_id in deleted_keyframe_ids:
             raise HTTPException(status_code=404, detail="Frame da duoc chuyen sang frames_deleted")
-        local_file = resolve_local_keyframe_file(keyframe_id)
+        local_file = resolve_local_image_file(
+            keyframe_id,
+            local_keyframe_roots,
+            (".jpg", ".jpeg", ".webp", ".png"),
+        )
         if local_file is not None:
             return FileResponse(
                 local_file,
-                media_type="image/jpeg",
-                headers={"Cache-Control": "public, max-age=31536000, immutable", "X-Keyframe-Source": "local-jpg"},
+                headers={"Cache-Control": "public, max-age=31536000, immutable", "X-Keyframe-Source": "local-keyframe"},
             )
         return await proxy_backend(request, f"/keyframe/{urllib.parse.quote(keyframe_id)}")
 
     @app.head("/keyframe/{keyframe_id:path}")
     async def keyframe_head(keyframe_id: str, request: Request):
-        local_file = resolve_local_keyframe_file(keyframe_id)
+        local_file = resolve_local_image_file(
+            keyframe_id,
+            local_keyframe_roots,
+            (".jpg", ".jpeg", ".webp", ".png"),
+        )
         if local_file is not None:
             return Response(
                 status_code=200,
-                media_type="image/jpeg",
-                headers={"Cache-Control": "public, max-age=31536000, immutable", "X-Keyframe-Source": "local-jpg"},
+                media_type=mimetypes.guess_type(local_file.name)[0] or "application/octet-stream",
+                headers={"Cache-Control": "public, max-age=31536000, immutable", "X-Keyframe-Source": "local-keyframe"},
             )
         return await proxy_backend(request, f"/keyframe/{urllib.parse.quote(keyframe_id)}")
 
@@ -731,23 +890,30 @@ def create_app(
     async def thumbnail(keyframe_id: str, request: Request):
         if keyframe_id in deleted_keyframe_ids:
             raise HTTPException(status_code=404, detail="Frame da duoc chuyen sang frames_deleted")
-        local_file = resolve_local_keyframe_file(keyframe_id)
+        local_file = resolve_local_image_file(
+            keyframe_id,
+            local_thumbnail_roots,
+            (".webp", ".jpg", ".jpeg", ".png"),
+        )
         if local_file is not None:
             return FileResponse(
                 local_file,
-                media_type="image/jpeg",
-                headers={"Cache-Control": "public, max-age=31536000, immutable", "X-Keyframe-Source": "local-jpg"},
+                headers={"Cache-Control": "public, max-age=31536000, immutable", "X-Keyframe-Source": "local-thumbnail"},
             )
         return await proxy_backend(request, f"/thumbnail/{urllib.parse.quote(keyframe_id)}")
 
     @app.head("/thumbnail/{keyframe_id:path}")
     async def thumbnail_head(keyframe_id: str, request: Request):
-        local_file = resolve_local_keyframe_file(keyframe_id)
+        local_file = resolve_local_image_file(
+            keyframe_id,
+            local_thumbnail_roots,
+            (".webp", ".jpg", ".jpeg", ".png"),
+        )
         if local_file is not None:
             return Response(
                 status_code=200,
-                media_type="image/jpeg",
-                headers={"Cache-Control": "public, max-age=31536000, immutable", "X-Keyframe-Source": "local-jpg"},
+                media_type=mimetypes.guess_type(local_file.name)[0] or "application/octet-stream",
+                headers={"Cache-Control": "public, max-age=31536000, immutable", "X-Keyframe-Source": "local-thumbnail"},
             )
         return await proxy_backend(request, f"/thumbnail/{urllib.parse.quote(keyframe_id)}")
 
@@ -755,35 +921,95 @@ def create_app(
     async def keyframe_webp(keyframe_id: str, request: Request):
         if keyframe_id in deleted_keyframe_ids:
             raise HTTPException(status_code=404, detail="Frame da duoc chuyen sang frames_deleted")
-        local_file = resolve_local_keyframe_file(keyframe_id)
+        local_file = resolve_local_image_file(
+            keyframe_id,
+            local_keyframe_roots,
+            (".webp", ".jpg", ".jpeg", ".png"),
+        )
         if local_file is not None:
             return FileResponse(
                 local_file,
-                media_type="image/jpeg",
-                headers={"Cache-Control": "public, max-age=31536000, immutable", "X-Keyframe-Source": "local-jpg"},
+                headers={"Cache-Control": "public, max-age=31536000, immutable", "X-Keyframe-Source": "local-keyframe"},
             )
         return await proxy_backend(request, f"/keyframe-webp/{urllib.parse.quote(keyframe_id)}")
 
     @app.head("/keyframe-webp/{keyframe_id:path}")
     async def keyframe_webp_head(keyframe_id: str, request: Request):
-        local_file = resolve_local_keyframe_file(keyframe_id)
+        local_file = resolve_local_image_file(
+            keyframe_id,
+            local_keyframe_roots,
+            (".webp", ".jpg", ".jpeg", ".png"),
+        )
         if local_file is not None:
             return Response(
                 status_code=200,
-                media_type="image/jpeg",
-                headers={"Cache-Control": "public, max-age=31536000, immutable", "X-Keyframe-Source": "local-jpg"},
+                media_type=mimetypes.guess_type(local_file.name)[0] or "application/octet-stream",
+                headers={"Cache-Control": "public, max-age=31536000, immutable", "X-Keyframe-Source": "local-keyframe"},
             )
         return await proxy_backend(request, f"/keyframe-webp/{urllib.parse.quote(keyframe_id)}")
 
+    # Persistent connection pool for high-throughput async video streaming
+    hls_http_client = httpx.AsyncClient(
+        timeout=httpx.Timeout(connect=8.0, read=60.0, write=10.0, pool=30.0),
+        limits=httpx.Limits(max_keepalive_connections=50, max_connections=100),
+        follow_redirects=True,
+    )
+
+    @app.on_event("shutdown")
+    async def shutdown_hls_client():
+        await hls_http_client.aclose()
+
+    async def proxy_stream_url(request: Request, target_url: str) -> Response:
+        forward_headers = {}
+        for key in ("range", "user-agent", "accept", "accept-encoding", "if-none-match", "if-modified-since"):
+            val = request.headers.get(key)
+            if val:
+                forward_headers[key] = val
+
+        try:
+            req = hls_http_client.build_request(
+                request.method,
+                target_url,
+                headers=forward_headers,
+            )
+            resp = await hls_http_client.send(req, stream=True)
+        except Exception as exc:
+            return JSONResponse({"detail": f"Proxy HLS streaming that bai: {exc}"}, status_code=502)
+
+        out_headers = {}
+        for key, value in resp.headers.items():
+            if key.lower() not in {"connection", "transfer-encoding", "content-encoding", "keep-alive"}:
+                out_headers[key] = value
+
+        if ".ts" in target_url:
+            out_headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        elif ".m3u8" in target_url:
+            out_headers["Cache-Control"] = "public, max-age=60"
+
+        if request.method == "HEAD":
+            await resp.aclose()
+            return Response(
+                status_code=resp.status_code,
+                headers=out_headers,
+                media_type=resp.headers.get("content-type"),
+            )
+
+        async def body_stream():
+            try:
+                async for chunk in resp.aiter_bytes(chunk_size=64 * 1024):
+                    yield chunk
+            finally:
+                await resp.aclose()
+
+        return StreamingResponse(
+            body_stream(),
+            status_code=resp.status_code,
+            headers=out_headers,
+            media_type=resp.headers.get("content-type"),
+        )
+
     async def proxy_url(request: Request, target_url: str, timeout: int = 300) -> Response:
-        body = await request.body() if request.method in {"POST", "PUT", "PATCH"} else None
-        headers = {}
-        for key in FORWARDED_HEADERS:
-            value = request.headers.get(key)
-            if value:
-                headers[key] = value
-        req = urllib.request.Request(target_url, data=body, headers=headers, method=request.method)
-        return await forward_urllib_request(req, timeout=timeout)
+        return await proxy_stream_url(request, target_url)
 
     @app.get("/hls/{video_id}/{asset_path:path}")
     async def get_hls_asset(video_id: str, asset_path: str, request: Request):
@@ -797,7 +1023,7 @@ def create_app(
         except HTTPException:
             if hls_server_url:
                 target = hls_server_url.rstrip("/") + f"/hls/{urllib.parse.quote(video_id)}/{asset_path}"
-                return await proxy_url(request, target)
+                return await proxy_stream_url(request, target)
             raise
 
     @app.head("/hls/{video_id}/{asset_path:path}")
@@ -812,7 +1038,7 @@ def create_app(
         except HTTPException:
             if hls_server_url:
                 target = hls_server_url.rstrip("/") + f"/hls/{urllib.parse.quote(video_id)}/{asset_path}"
-                return await proxy_url(request, target)
+                return await proxy_stream_url(request, target)
             raise
 
     @app.get("/videos/{video_id}")
@@ -829,7 +1055,7 @@ def create_app(
         except HTTPException:
             if hls_server_url:
                 target = hls_server_url.rstrip("/") + f"/videos/{urllib.parse.quote(video_id)}"
-                return await proxy_url(request, target)
+                return await proxy_stream_url(request, target)
             raise
 
     @app.head("/videos/{video_id}")
@@ -846,7 +1072,7 @@ def create_app(
         except HTTPException:
             if hls_server_url:
                 target = hls_server_url.rstrip("/") + f"/videos/{urllib.parse.quote(video_id)}"
-                return await proxy_url(request, target)
+                return await proxy_stream_url(request, target)
             raise
 
     @app.get("/video/{video_id}")
@@ -864,6 +1090,7 @@ def create_app(
             query["filename"]: query["answer_count"]
             for query in load_query_catalog(query_root, csv_submission_root)
         }
+        state["query_viewers"] = team_socket_hub.get_query_viewers()
         return state
 
     @app.get("/submission/queries")
@@ -909,6 +1136,8 @@ def create_app(
         except Exception as exc:  # noqa: BLE001
             return JSONResponse({"detail": f"Bai nop CSV khong hop le: {exc}"}, status_code=400)
 
+        user_name = str(body.get("user_name", body.get("name", "Thành viên"))).strip() or "Thành viên"
+        user_key = normalize_user_key(user_name)
         output_path = csv_submission_root / f"{query_path.stem}.csv"
         async with team_state_lock:
             csv_submission_root.mkdir(parents=True, exist_ok=True)
@@ -927,9 +1156,51 @@ def create_app(
                         csv.writer(file_obj, lineterminator="\n").writerow(row)
                 count += 1
                 state = read_team_state(team_state_path)
-                state["active_query"] = filename
                 state.setdefault("submission_counts", {})[filename] = count
                 write_team_state(state, team_state_path)
+
+                content_summary = ""
+                if task_type == "kis" and len(row) >= 2:
+                    content_summary = f"Frame {row[0]} (ID: {row[1]})"
+                elif task_type == "qa" and len(row) >= 3:
+                    content_summary = f"Frame {row[0]} (ID: {row[1]}) | Đáp án: '{row[2]}'"
+                elif task_type == "trake" and len(row) >= 2:
+                    content_summary = f"Chuỗi frame {row[0]}: {', '.join(str(x) for x in row[1:])}"
+                else:
+                    content_summary = ", ".join(str(x) for x in row)
+
+                now_ts = time.time()
+                sub_record = {
+                    "user_name": user_name,
+                    "user_key": user_key,
+                    "query_filename": filename,
+                    "task_type": task_type,
+                    "output_filename": output_path.name,
+                    "content_summary": content_summary,
+                    "row": row,
+                    "timestamp": now_ts,
+                }
+                append_submission_log(sub_record)
+
+                try:
+                    import datetime
+                    csv_activity_path = SUBMISSION_ACTIVITY_CSV_PATH
+                    write_head = not csv_activity_path.exists()
+                    with csv_activity_path.open("a", encoding="utf-8", newline="") as f_act:
+                        act_writer = csv.writer(f_act)
+                        if write_head:
+                            act_writer.writerow(["ThoiGian", "NguoiSua", "CauHoi", "LoaiCau", "NoiDungSuaNop", "FileCSV"])
+                        time_display = datetime.datetime.fromtimestamp(now_ts).strftime("%Y-%m-%d %H:%M:%S")
+                        act_writer.writerow([time_display, user_name, filename, task_type, content_summary, output_path.name])
+                except Exception:
+                    pass
+
+                profiles = read_user_profiles()
+                user_prof = profiles.setdefault(user_key, {"name": user_name, "drafts": {}})
+                user_prof["name"] = user_name
+                user_prof["total_submissions"] = int(user_prof.get("total_submissions", 0)) + 1
+                user_prof["last_submitted_at"] = time.time()
+                write_user_profiles(profiles)
 
         await team_socket_hub.broadcast(state)
         return {
@@ -937,6 +1208,7 @@ def create_app(
             "output_filename": output_path.name,
             "answer_count": count,
             "row": row,
+            "user_name": user_name,
         }
 
     @app.get("/correct-submission-sound.mp3")
@@ -966,13 +1238,134 @@ def create_app(
                 query["filename"]: query["answer_count"]
                 for query in load_query_catalog(query_root, csv_submission_root)
             }
+            state["query_viewers"] = team_socket_hub.get_query_viewers()
             await websocket.send_json(state)
             while True:
-                await websocket.receive_text()
+                data = await websocket.receive_text()
+                try:
+                    msg = json.loads(data)
+                    if isinstance(msg, dict) and msg.get("type") == "viewing":
+                        cid = str(msg.get("client_id", "")).strip()
+                        cname = str(msg.get("name", "")).strip()
+                        cfile = str(msg.get("filename", "")).strip()
+                        if cid and cname and cfile:
+                            team_socket_hub.update_viewer(cid, cname, cfile, websocket)
+                            await team_socket_hub.broadcast_viewers()
+                except Exception:
+                    pass
         except WebSocketDisconnect:
             team_socket_hub.disconnect(websocket)
+            await team_socket_hub.broadcast_viewers()
         except Exception:  # noqa: BLE001
             team_socket_hub.disconnect(websocket)
+            await team_socket_hub.broadcast_viewers()
+
+    @app.post("/team/viewing")
+    async def report_viewing(body: Dict[str, Any]):
+        cid = str(body.get("client_id", "")).strip()
+        cname = str(body.get("name", "")).strip()
+        cfile = str(body.get("filename", "")).strip()
+        if cid and cname and cfile:
+            team_socket_hub.update_viewer(cid, cname, cfile)
+            await team_socket_hub.broadcast_viewers()
+        return {"ok": True, "viewers": team_socket_hub.get_query_viewers()}
+
+    @app.post("/team/user/sync")
+    async def sync_user_profile(body: Dict[str, Any]):
+        name = str(body.get("name", "")).strip()
+        if not name:
+            return JSONResponse({"detail": "name khong duoc rong"}, status_code=400)
+        user_key = normalize_user_key(name)
+        async with team_state_lock:
+            profiles = read_user_profiles()
+            user_prof = profiles.setdefault(user_key, {
+                "name": name,
+                "active_query": "",
+                "drafts": {},
+                "total_submissions": 0,
+                "created_at": time.time(),
+            })
+            user_prof["name"] = name
+            user_prof["updated_at"] = time.time()
+
+            if "active_query" in body and body["active_query"]:
+                clean_q = str(body["active_query"]).strip()
+                if (query_root / clean_q).is_file():
+                    user_prof["active_query"] = clean_q
+
+            draft_qa = body.get("draft_qa_answer")
+            target_query = body.get("active_query_for_draft") or user_prof.get("active_query")
+            if draft_qa is not None and target_query:
+                user_prof.setdefault("drafts", {})[str(target_query).strip()] = str(draft_qa)
+
+            write_user_profiles(profiles)
+
+        return {
+            "user_key": user_key,
+            "name": name,
+            "active_query": user_prof.get("active_query", ""),
+            "drafts": user_prof.get("drafts", {}),
+            "total_submissions": user_prof.get("total_submissions", 0),
+        }
+
+    @app.post("/team/user/stats/clear")
+    async def clear_user_stats():
+        async with team_state_lock:
+            if SUBMISSION_LOG_PATH.is_file():
+                SUBMISSION_LOG_PATH.write_text("[]", encoding="utf-8")
+            if SUBMISSION_ACTIVITY_CSV_PATH.is_file():
+                SUBMISSION_ACTIVITY_CSV_PATH.write_text("ThoiGian,NguoiSua,CauHoi,LoaiCau,NoiDungSuaNop,FileCSV\n", encoding="utf-8")
+            if USER_PROFILES_PATH.is_file():
+                try:
+                    profs = json.loads(USER_PROFILES_PATH.read_text(encoding="utf-8"))
+                    for p in profs.values():
+                        if isinstance(p, dict):
+                            p["total_submissions"] = 0
+                    USER_PROFILES_PATH.write_text(json.dumps(profs, ensure_ascii=False, indent=2), encoding="utf-8")
+                except Exception:
+                    pass
+        return {"status": "ok", "message": "Đã xóa sạch lịch sử nộp bài"}
+
+    @app.get("/team/user/stats")
+    async def get_user_stats(name: str = ""):
+        clean_name = str(name).strip()
+        user_key = normalize_user_key(clean_name) if clean_name else ""
+        logs = read_submission_log()
+
+        counts_by_key: Dict[str, Dict[str, Any]] = {}
+        for entry in logs:
+            k = entry.get("user_key") or normalize_user_key(entry.get("user_name", "Ẩn danh"))
+            disp_name = entry.get("user_name") or "Ẩn danh"
+            if k not in counts_by_key:
+                counts_by_key[k] = {"name": disp_name, "count": 0, "last_timestamp": 0}
+            counts_by_key[k]["count"] += 1
+            counts_by_key[k]["last_timestamp"] = max(
+                counts_by_key[k]["last_timestamp"],
+                float(entry.get("timestamp", 0))
+            )
+
+        leaderboard = sorted(
+            counts_by_key.values(),
+            key=lambda item: item["count"],
+            reverse=True,
+        )
+
+        personal_logs = []
+        if user_key:
+            personal_logs = [
+                entry for entry in reversed(logs)
+                if (entry.get("user_key") == user_key or normalize_user_key(entry.get("user_name", "")) == user_key)
+            ][:100]
+
+        team_history = list(reversed(logs))[:150]
+        return {
+            "user_name": clean_name,
+            "user_submissions_count": len(personal_logs),
+            "total_team_submissions": len(logs),
+            "personal_history": personal_logs,
+            "team_history": team_history,
+            "leaderboard": leaderboard,
+        }
 
     @app.post("/team/member")
     async def save_team_member(body: Dict[str, Any]):
@@ -1067,6 +1460,7 @@ def create_app(
             votes.append({
                 "selection_id": uuid.uuid4().hex,
                 "client_id": client_id,
+                "user_key": normalize_user_key(name),
                 "name": name,
                 "item": item,
                 "created_at": time.time(),
@@ -1113,6 +1507,7 @@ def create_app(
                 trake_frames.append({
                     "selection_id": uuid.uuid4().hex,
                     "client_id": client_id,
+                    "user_key": normalize_user_key(name),
                     "name": name,
                     "item": item,
                     "created_at": time.time(),
@@ -1171,6 +1566,7 @@ def create_app(
             selection = {
                 "selection_id": selection_id,
                 "client_id": client_id,
+                "user_key": normalize_user_key(name),
                 "name": name,
                 "item": item,
                 "created_at": time.time(),
@@ -1267,17 +1663,27 @@ def create_app(
 
     @app.post("/team/clear")
     async def clear_team_votes(body: Dict[str, Any]):
-        try:
-            client_id = str(body["client_id"]).strip()
-            if not client_id:
-                raise ValueError("client_id khong duoc rong")
-        except Exception as exc:  # noqa: BLE001
-            return JSONResponse({"detail": f"Body clear vote khong hop le: {exc}"}, status_code=400)
+        client_id = str(body.get("client_id", "")).strip()
+        name = str(body.get("name", "")).strip()
+        user_key = normalize_user_key(name) if name else ""
+        if not client_id and not user_key:
+            return JSONResponse({"detail": "client_id hoac name khong duoc rong"}, status_code=400)
 
         async with team_state_lock:
             state = read_team_state(team_state_path)
-            removed = [vote for vote in state.get("votes", []) if vote.get("client_id") == client_id]
-            state["votes"] = [vote for vote in state.get("votes", []) if vote.get("client_id") != client_id]
+
+            def is_match(vote: Dict[str, Any]) -> bool:
+                if user_key and (
+                    vote.get("user_key") == user_key
+                    or normalize_user_key(vote.get("name", "")) == user_key
+                ):
+                    return True
+                if client_id and vote.get("client_id") == client_id:
+                    return True
+                return False
+
+            removed = [vote for vote in state.get("votes", []) if is_match(vote)]
+            state["votes"] = [vote for vote in state.get("votes", []) if not is_match(vote)]
             for vote in removed:
                 delete_capture_for_vote(vote)
             write_team_state(state, team_state_path)
@@ -1388,6 +1794,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--records-path", type=Path, default=DEFAULT_RECORDS_PATH)
     parser.add_argument("--deleted-manifest", type=Path, default=DEFAULT_DELETED_MANIFEST)
     parser.add_argument("--query-root", type=Path, default=QUERY_ROOT)
+    parser.add_argument("--keyframe-root", type=Path)
+    parser.add_argument("--thumbnail-root", type=Path)
     return parser.parse_args()
 
 
@@ -1399,10 +1807,14 @@ def main() -> int:
         deleted_manifest=args.deleted_manifest,
         query_root=args.query_root,
         hls_server_url=args.hls_server_url,
+        keyframe_root=args.keyframe_root,
+        thumbnail_root=args.thumbnail_root,
     )
     print(f"Frontend FastAPI: http://{args.host}:{args.port}/")
     print(f"Proxy backend: {args.backend_url}")
     print(f"Remote HLS server: {args.hls_server_url}")
+    print(f"Local keyframe root: {args.keyframe_root or 'disabled'}")
+    print(f"Local thumbnail root: {args.thumbnail_root or 'disabled'}")
     print(f"Video records: {args.records_path} (metadata preload runs in background)")
     print(f"Deleted frame filter: {args.deleted_manifest} ({len(app.state.deleted_rows)} rows)")
     uvicorn.run(app, host=args.host, port=args.port, log_level="info")

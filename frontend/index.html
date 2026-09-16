@@ -3,29 +3,49 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>AI Challenge 2026</title>
-  <link rel="stylesheet" href="./styles.css?v=20260823-accent-sliders" />
+  <title>Team Prometheus</title>
+  <link rel="stylesheet" href="./styles.css?v=20260831-beit3-toggle" />
 </head>
 <body>
   <div id="appShell" class="app-shell">
     <header class="topbar">
-      <div class="brand">
-        <div class="brand-mark" aria-hidden="true">A</div>
-        <strong>AI Challenge 2026</strong>
+      <div class="brand" style="display: flex; align-items: center; position: relative;">
+        <div class="brand-mark" aria-hidden="true">P</div>
+        <strong>Team Prometheus</strong>
+        <button id="globalSimilarityBtn" class="ghost compact" type="button" title="Bật/Tắt tìm kiếm bằng ảnh" aria-expanded="false" style="margin-left: 8px; padding: 4px; border-radius: 6px; display: flex; align-items: center; gap: 4px;">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2" ry="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/></svg>
+        </button>
       </div>
       <nav id="queryStrip" class="query-strip" aria-label="Danh sách câu hỏi"></nav>
       <div class="top-actions">
-        <button id="submissionModeToggle" class="submission-mode-toggle" type="button" aria-label="Chế độ nộp bài hiện tại DRES" title="Chuyển giữa DRES và CSV">
+                <button id="submissionModeToggle" class="submission-mode-toggle" type="button" aria-label="Chế độ nộp bài hiện tại DRES" title="Chuyển giữa DRES và CSV">
           <span data-mode="dres">DRES</span><span data-mode="csv">CSV</span>
+        </button>
+        <button id="memberNameBtn" class="ghost member-name-btn" type="button" title="Bấm để đổi tên hiển thị của bạn">
+          <svg class="top-btn-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/>
+            <circle cx="12" cy="7" r="4"/>
+          </svg>
+          <span id="memberNameDisplay">Đặt tên</span>
+        </button>
+        <button id="statsOpenBtn" class="ghost stats-btn" type="button" title="Xem thống kê đóng góp & lịch sử nộp bài">
+          <svg class="top-btn-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <line x1="18" y1="20" x2="18" y2="10"/>
+            <line x1="12" y1="20" x2="12" y2="4"/>
+            <line x1="6" y1="20" x2="6" y2="14"/>
+          </svg>
+          <span>Thống kê</span>
         </button>
         <select id="taskType" class="top-select" title="Dạng nộp bài" aria-label="Dạng nộp bài">
           <option value="kis">KIS</option>
-          <option value="qa">Q&A</option>
           <option value="trake">TRAKE</option>
+          <option value="qa">Q&A</option>
         </select>
-        <input id="qaAnswer" class="top-qa-answer" type="text" placeholder="Câu trả lời Q&A" aria-label="Câu trả lời Q&A" />
-        <button id="qaSubmitBtn" class="primary" type="button" title="Nộp câu trả lời Q&A lên DRES">Nộp Q&A</button>
-        <button id="dresOpenBtn" class="ghost" type="button" title="Đăng nhập và chọn evaluation DRES" aria-label="DRES">DRES</button>
+        <input id="qaAnswer" class="top-qa-answer" type="text" placeholder="Nhập câu trả lời Q&A (Enter để nộp)..." aria-label="Câu trả lời Q&A" />
+        <button id="dresOpenBtn" class="ghost" type="button" title="Đăng nhập và chọn evaluation DRES" aria-label="DRES" hidden>DRES</button>
+        <button id="themeToggleBtn" class="ghost compact" type="button" title="Đổi giao diện Sáng/Tối" aria-label="Đổi giao diện">
+          <i data-lucide="moon" aria-hidden="true"></i>
+        </button>
         <div class="search-mode-control embedding-model-control" aria-label="Mô hình tìm kiếm">
           <button id="embeddingModelToggle" class="is-active" type="button" aria-label="Mô hình hiện tại MetaCLIP-2; bấm để đổi sang BEiT-3">MetaCLIP-2</button>
         </div>
@@ -37,18 +57,31 @@
 
     <aside class="query-panel">
 
-      <div id="temporalActions" class="temporal-actions">
-        <button id="addStageBtn" class="ghost" type="button" title="Thêm hành động vào cuối chuỗi">+ Thêm hành động</button>
-        <button id="resetTemporalBtn" class="ghost" type="button" title="Xóa session temporal và tìm lại từ Query A">Reset Temporal</button>
-      </div>
+
       <div id="stageList" class="stage-list"></div>
       <div class="search-options">
         <label class="video-query-field"><span class="query-field-heading"><b class="query-field-badge" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"></rect><path d="m10 9 5 3-5 3Z"></path></svg></b>Video Query</span>
           <input id="videoFilter" type="text" placeholder="Để trống để tìm toàn bộ video" autocomplete="off" />
         </label>
-
-        <div id="status" class="status-text" hidden>Sẵn sàng.</div>
       </div>
+      
+      <div class="search-options" id="globalSimilarityPopover" hidden style="margin-top: 12px;">
+        <div class="query-field-heading"><b class="query-field-badge" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2" ry="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/></svg></b>Image Query</div>
+        <div id="globalSimilarityDropzone" class="similarity-dropzone" tabindex="0" role="button" aria-label="Kéo thả ảnh vào đây" style="border: 1px dashed var(--border-subtle); border-radius: 6px; padding: 12px; text-align: center; color: var(--text-secondary); transition: all 0.2s; cursor: pointer; background: var(--bg-surface); margin-top: 8px;">
+          <strong id="globalSimilarityDropzoneText" style="color: var(--text-primary); font-size: 13px;">Thả ảnh vào đây</strong>
+        </div>
+        <label style="display: block; font-size: 12px; color: var(--text-secondary); margin-top: 8px;">
+          <input id="globalSimilarityQuery" type="text" placeholder="Mô tả thêm (nhấn Enter để tìm)..." />
+        </label>
+        <label class="similarity-weight-control" style="display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--text-secondary); margin-top: 8px;">
+          <div style="display: flex; justify-content: space-between;">
+            <span>Chữ (<output id="globalSimilarityWeightValue">30</output>%)</span>
+            <span>Ảnh (<output id="globalSimilarityImageWeightValue">70</output>%)</span>
+          </div>
+          <input id="globalSimilarityWeight" type="range" min="0" max="100" value="30" step="1" />
+        </label>
+      </div>
+      <div id="status" class="status-text" hidden>Sẵn sàng.</div>
     </aside>
 
     <main class="results-area">
@@ -66,11 +99,13 @@
       <section id="results" class="results"></section>
     </main>
 
-    <section id="selectionTray" class="selection-tray" hidden>
-      <div>
-        <strong id="selectionTitle">Khay chung</strong>
+    <section id="selectionTray" class="selection-tray">
+      <div class="tray-header" style="display: flex; align-items: center; gap: 8px;">
+        <div class="tray-tabs" style="display: flex; background: var(--bg-surface-elevated); border-radius: 8px; padding: 2px;">
+          <button id="trayTabChung" class="tray-tab is-active" type="button" style="border: none; background: transparent; padding: 4px 12px; border-radius: 6px; font-weight: 600; cursor: pointer;">Chung</button>
+        </div>
         <span id="selectionCount" hidden></span>
-        <button id="trakeSubmitBtn" class="primary trake-submit" type="button" title="Nộp TRAKE lên DRES" aria-label="Nộp TRAKE lên DRES" hidden><i data-lucide="send" aria-hidden="true"></i></button>
+
       </div>
       <div id="selectedFrames" class="selected-frames"></div>
     </section>
@@ -83,47 +118,73 @@
         <button id="closeVideoBtn" class="ghost compact" type="button" title="Đóng video" aria-label="Đóng video">Đóng</button>
       </header>
       <div id="videoActiveQueryContent" class="video-active-query-content" hidden></div>
-      <div id="videoShell" class="video-shell">
-        <video id="player" class="modal-video" playsinline preload="metadata"></video>
-      </div>
-      <div class="video-controls" aria-label="Điều khiển video">
-        <div class="video-control-row">
-          <div class="video-control-left">
-            <button id="videoBackBtn" class="video-icon-btn" type="button" title="Lùi 5 giây" aria-label="Lùi 5 giây">‹</button>
-            <button id="videoPlayBtn" class="video-icon-btn video-main-play" type="button" title="Phát/Tạm dừng" aria-label="Phát/Tạm dừng"></button>
-            <button id="videoForwardBtn" class="video-icon-btn" type="button" title="Tiến 5 giây" aria-label="Tiến 5 giây">›</button>
-            <div id="videoVolumeControl" class="video-popover-control">
-              <button id="videoVolumeBtn" class="video-icon-btn" type="button" title="Điều chỉnh âm lượng" aria-label="Điều chỉnh âm lượng" aria-expanded="false"></button>
-              <div id="videoVolumePopover" class="video-popover video-volume-popover" hidden>
-                <input id="videoVolumeSlider" type="range" min="0" max="100" value="100" step="1" aria-label="Âm lượng" />
-                <span id="videoVolumeValue">100%</span>
+      <div class="video-main-layout">
+        <div class="video-player-column">
+          <div id="videoShell" class="video-shell">
+            <video id="player" class="modal-video" playsinline preload="metadata"></video>
+          </div>
+          <div class="video-controls" aria-label="Điều khiển video">
+            <div class="video-control-row">
+              <div class="video-control-left">
+                <button id="videoBackBtn" class="video-icon-btn" type="button" title="Lùi 5 giây" aria-label="Lùi 5 giây">‹</button>
+                <button id="videoPlayBtn" class="video-icon-btn video-main-play" type="button" title="Phát/Tạm dừng" aria-label="Phát/Tạm dừng"></button>
+                <button id="videoForwardBtn" class="video-icon-btn" type="button" title="Tiến 5 giây" aria-label="Tiến 5 giây">›</button>
+                <div id="videoVolumeControl" class="video-popover-control">
+                  <button id="videoVolumeBtn" class="video-icon-btn" type="button" title="Điều chỉnh âm lượng" aria-label="Điều chỉnh âm lượng" aria-expanded="false"></button>
+                  <div id="videoVolumePopover" class="video-popover video-volume-popover" hidden>
+                    <input id="videoVolumeSlider" type="range" min="0" max="100" value="100" step="1" aria-label="Âm lượng" />
+                    <span id="videoVolumeValue">100%</span>
+                  </div>
+                </div>
+              </div>
+              <div class="video-control-center">
+                <input id="videoProgress" class="video-progress" type="range" min="0" max="1000" value="0" step="1" aria-label="Tua video" />
+                <span id="videoTime" class="video-time">0:00 / 0:00</span>
+              </div>
+              <div class="video-control-right" aria-label="Tác vụ và phát">
+                <div class="video-btn-group">
+                  <button id="captureFrameBtn" class="video-capture-btn" type="button" title="Thêm đúng frame đang hiển thị vào khay chung">Thêm vào khay</button>
+                  <button id="videoAddTrakeBtn" class="video-capture-btn video-trake-add-btn" type="button" title="Thêm frame đang hiển thị vào TRAKE">Add TRAKE</button>
+                  <button id="videoSubmitCurrentBtn" class="video-submit-current-btn" type="button" title="Submit frame đang hiển thị lên DRES" aria-label="Submit frame đang hiển thị lên DRES"><i data-lucide="send"></i></button>
+                </div>
+                <div class="video-btn-group">
+                  <button id="expandShotContextBtn" class="video-context-btn" type="button" title="Xem toàn bộ 24 shot lân cận" disabled><i data-lucide="gallery-horizontal-end"></i>24 shot</button>
+                  <button id="expandFrameContextBtn" class="video-context-btn" type="button" title="Xem 48 frame lân cận frame đang hiển thị"><i data-lucide="images"></i>48 frame</button>
+                </div>
+                <div class="video-btn-group">
+                  <div id="videoSpeedControl" class="video-popover-control">
+                    <button id="videoSpeedBtn" class="video-rate-btn is-active" type="button" title="Chọn tốc độ phát" aria-label="Chọn tốc độ phát" aria-expanded="false">x1</button>
+                    <div id="videoSpeedMenu" class="video-popover video-speed-menu" role="menu" hidden>
+                      <button class="video-speed-option" type="button" role="menuitemradio" aria-checked="false" data-rate="0.25"><i data-lucide="check"></i><span>x0.25</span></button>
+                      <button class="video-speed-option" type="button" role="menuitemradio" aria-checked="false" data-rate="0.5"><i data-lucide="check"></i><span>x0.5</span></button>
+                      <button class="video-speed-option is-active" type="button" role="menuitemradio" aria-checked="true" data-rate="1"><i data-lucide="check"></i><span>x1</span></button>
+                      <button class="video-speed-option" type="button" role="menuitemradio" aria-checked="false" data-rate="2"><i data-lucide="check"></i><span>x2</span></button>
+                      <button class="video-speed-option" type="button" role="menuitemradio" aria-checked="false" data-rate="5"><i data-lucide="check"></i><span>x5</span></button>
+                      <button class="video-speed-option" type="button" role="menuitemradio" aria-checked="false" data-rate="10"><i data-lucide="check"></i><span>x10</span></button>
+                    </div>
+                  </div>
+                  <button id="videoFullscreenBtn" class="video-icon-btn" type="button" title="Toàn màn hình" aria-label="Toàn màn hình">⛶</button>
+                </div>
               </div>
             </div>
-          </div>
-          <div class="video-control-center">
-            <input id="videoProgress" class="video-progress" type="range" min="0" max="1000" value="0" step="1" aria-label="Tua video" />
-          </div>
-          <div class="video-control-right" aria-label="Tốc độ và toàn màn hình">
-            <span id="videoTime" class="video-time">0:00 / 0:00</span>
-            <button id="captureFrameBtn" class="video-capture-btn" type="button" title="Thêm đúng frame đang hiển thị vào khay">Thêm vào khay</button>
-            <button id="videoSubmitCurrentBtn" class="video-submit-current-btn" type="button" title="Submit frame đang hiển thị lên DRES" aria-label="Submit frame đang hiển thị lên DRES"><i data-lucide="send"></i></button>
-            <button id="expandShotContextBtn" class="video-context-btn" type="button" title="Xem toàn bộ 24 shot lân cận" disabled><i data-lucide="gallery-horizontal-end"></i>Xem 24 shot</button>
-            <button id="expandFrameContextBtn" class="video-context-btn" type="button" title="Xem 48 frame lân cận frame đang hiển thị"><i data-lucide="images"></i>Xem 48 frame</button>
-            <div id="videoSpeedControl" class="video-popover-control">
-              <button id="videoSpeedBtn" class="video-rate-btn is-active" type="button" title="Chọn tốc độ phát" aria-label="Chọn tốc độ phát" aria-expanded="false">x1</button>
-              <div id="videoSpeedMenu" class="video-popover video-speed-menu" role="menu" hidden>
-                <button class="video-speed-option" type="button" role="menuitemradio" aria-checked="false" data-rate="0.25"><i data-lucide="check"></i><span>x0.25</span></button>
-                <button class="video-speed-option" type="button" role="menuitemradio" aria-checked="false" data-rate="0.5"><i data-lucide="check"></i><span>x0.5</span></button>
-                <button class="video-speed-option is-active" type="button" role="menuitemradio" aria-checked="true" data-rate="1"><i data-lucide="check"></i><span>x1</span></button>
-                <button class="video-speed-option" type="button" role="menuitemradio" aria-checked="false" data-rate="2"><i data-lucide="check"></i><span>x2</span></button>
-                <button class="video-speed-option" type="button" role="menuitemradio" aria-checked="false" data-rate="5"><i data-lucide="check"></i><span>x5</span></button>
-                <button class="video-speed-option" type="button" role="menuitemradio" aria-checked="false" data-rate="10"><i data-lucide="check"></i><span>x10</span></button>
-              </div>
-            </div>
-            <button id="videoFullscreenBtn" class="video-icon-btn" type="button" title="Toàn màn hình" aria-label="Toàn màn hình">⛶</button>
+            <div id="videoFrameStrip" class="video-frame-strip" aria-label="Frame lân cận"></div>
           </div>
         </div>
-        <div id="videoFrameStrip" class="video-frame-strip" aria-label="Frame đại diện"></div>
+        <aside id="videoTrakeTray" class="video-trake-tray" aria-label="Khay TRAKE">
+          <div class="video-trake-header">
+            <div class="video-trake-title-wrap">
+              <strong>TRAKE</strong>
+              <span id="videoTrakeCount" class="video-trake-badge">0</span>
+            </div>
+            <div class="video-trake-actions">
+              <button id="videoTrakeClearBtn" class="ghost compact video-trake-clear-btn" type="button" title="Xóa toàn bộ frame TRAKE">Xóa</button>
+              <button id="videoTrakeSubmitBtn" class="primary trake-submit video-trake-submit" type="button" title="Nộp TRAKE lên DRES" aria-label="Nộp TRAKE lên DRES">
+                <i data-lucide="send" aria-hidden="true"></i>
+              </button>
+            </div>
+          </div>
+          <div id="videoTrakeFrames" class="video-trake-frames-list"></div>
+        </aside>
       </div>
     </section>
   </div>
@@ -185,6 +246,10 @@
           </select>
           <button id="chooseEvaluationBtn" class="primary" type="button">Chọn evaluation</button>
           <button id="dresLogoutBtn" class="ghost" type="button">Đăng xuất</button>
+          <div class="session-user-box" style="margin-top: 10px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-muted); display: flex; align-items: center; justify-content: space-between; gap: 8px;">
+            <span>Biệt danh của bạn: <strong id="sessionMemberNameDisplay">Đặt tên</strong></span>
+            <button id="sessionChangeNameBtn" class="ghost compact" type="button" style="padding: 4px 10px; font-size: 12px; font-weight: 600;">Đổi tên</button>
+          </div>
         </div>
         <div id="memberNameView" class="submit-fields" hidden>
           <strong>Tên gọi của bạn</strong>
@@ -245,6 +310,85 @@
       </div>
     </section>
   </div>
+  <div id="shortcutsModal" class="video-modal shortcuts-modal" hidden>
+    <div class="modal-backdrop" data-close-shortcuts></div>
+    <section class="modal-panel shortcuts-panel" role="dialog" aria-modal="true" aria-labelledby="shortcutsTitle">
+      <header class="modal-head">
+        <strong id="shortcutsTitle">Phím tắt</strong>
+        <button id="closeShortcutsBtn" class="ghost compact" type="button" title="Đóng bảng phím tắt" aria-label="Đóng bảng phím tắt">Đóng</button>
+      </header>
+      <div class="shortcuts-body">
+        <div class="shortcuts-list">
+          <div class="shortcut-row">
+            <div class="shortcut-keys"><kbd>Shift</kbd> + <kbd>K</kbd></div>
+            <div class="shortcut-desc">Chuyển sang <b>KIS</b></div>
+          </div>
+          <div class="shortcut-row">
+            <div class="shortcut-keys"><kbd>Shift</kbd> + <kbd>T</kbd></div>
+            <div class="shortcut-desc">Chuyển sang <b>TRAKE</b></div>
+          </div>
+          <div class="shortcut-row">
+            <div class="shortcut-keys"><kbd>Shift</kbd> + <kbd>Q</kbd></div>
+            <div class="shortcut-desc">Chuyển sang <b>Q&A</b> (focus ô trả lời)</div>
+          </div>
+          <div class="shortcut-row">
+            <div class="shortcut-keys"><kbd>A</kbd></div>
+            <div class="shortcut-desc">Thêm Stage thời gian (+Stage)</div>
+          </div>
+          <div class="shortcut-row">
+            <div class="shortcut-keys"><kbd>D</kbd></div>
+            <div class="shortcut-desc">Xóa Stage cuối cùng (-Stage)</div>
+          </div>
+          <div class="shortcut-row">
+            <div class="shortcut-keys"><kbd>I</kbd></div>
+            <div class="shortcut-desc">Bật/Tắt tìm bằng ảnh (Image Query)</div>
+          </div>
+          <div class="shortcut-row">
+            <div class="shortcut-keys"><kbd>Esc</kbd></div>
+            <div class="shortcut-desc">Đóng mọi popup & tắt nhạc</div>
+          </div>
+          <div class="shortcut-row">
+            <div class="shortcut-keys"><kbd>?</kbd></div>
+            <div class="shortcut-desc">Bật/Tắt bảng phím tắt này</div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </div>
+  <!-- Floating Bottom-Left Settings/Shortcuts Button -->
+  <button id="shortcutsBtn" class="floating-shortcuts-btn" type="button" title="Bảng phím tắt & Cài đặt (Phím ?)" aria-label="Bảng phím tắt">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
+  </button>
+  
+  <div id="statsModal" class="video-modal stats-modal" hidden>
+    <div class="modal-backdrop" data-close-stats></div>
+    <section class="dres-panel stats-panel" role="dialog" aria-modal="true" aria-labelledby="statsTitle">
+      <header class="modal-head">
+        <strong id="statsTitle">📊 Thống kê & Lịch sử nộp bài</strong>
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <button id="clearStatsBtn" class="ghost compact" type="button" title="Xóa toàn bộ lịch sử nộp bài" style="font-size: 11px; color: var(--muted);">🗑️ Xóa lịch sử</button>
+          <button id="closeStatsBtn" class="ghost compact" type="button" title="Đóng" aria-label="Đóng">Đóng</button>
+        </div>
+      </header>
+      <div class="stats-body">
+        <div class="stats-tabs">
+          <button id="statsTabPersonal" class="is-active" type="button">Lịch sử của bạn (<span id="personalSubCount">0</span>)</button>
+          <button id="statsTabTeamHistory" type="button">Nhật ký toàn đội (<span id="teamHistorySubCount">0</span>)</button>
+          <button id="statsTabLeaderboard" type="button">Bảng xếp hạng (<span id="teamSubCount">0</span>)</button>
+        </div>
+        <div id="statsPersonalView" class="stats-view">
+          <div id="personalStatsList" class="stats-list"></div>
+        </div>
+        <div id="statsTeamHistoryView" class="stats-view" hidden>
+          <div id="teamHistoryList" class="stats-list"></div>
+        </div>
+        <div id="statsLeaderboardView" class="stats-view" hidden>
+          <div id="leaderboardList" class="stats-list"></div>
+        </div>
+      </div>
+    </section>
+  </div>
+
   <div id="correctCelebration" class="correct-celebration" role="status" aria-live="assertive" hidden>
     <div class="correct-celebration-card">
       <span>CORRECT</span>
@@ -253,6 +397,6 @@
   <audio id="correctSubmissionSound" src="/correct-submission-sound.mp3" preload="auto"></audio>
   <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.18/dist/hls.min.js"></script>
   <script src="https://unpkg.com/lucide@1.27.0/dist/umd/lucide.min.js"></script>
-  <script src="./app.js?v=20260823-removed-search-btn"></script>
+  <script src="./app.js?v=20260831-beit3-toggle"></script>
 </body>
 </html>
