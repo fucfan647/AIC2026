@@ -42,6 +42,7 @@ venv.bak/
 *.ckpt
 *.tflite
 *.engine
+metaclip_model/
 
 # --- Precomputed Embeddings & Vector Stores ---
 *.npy

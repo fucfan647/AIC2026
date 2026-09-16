@@ -24,6 +24,7 @@ $beit3RuntimePython = if (Test-AicFeatureEnabled -Config $config -Name "beit3") 
 $ppocrIndex = if (Test-AicFeatureEnabled -Config $config -Name "ppocr") { Resolve-AicSystemPath -Value ([string]$config.paths.ppocr_index) } else { Join-Path $disabledRoot "ppocr.sqlite" }
 $monkeyOcrIndex = if (Test-AicFeatureEnabled -Config $config -Name "monkey_ocr") { Resolve-AicSystemPath -Value ([string]$config.paths.monkey_ocr_index) } else { Join-Path $disabledRoot "monkey_ocr.sqlite" }
 $asrIndex = if (Test-AicFeatureEnabled -Config $config -Name "asr") { Resolve-AicSystemPath -Value ([string]$config.paths.asr_index) } else { Join-Path $disabledRoot "asr.sqlite" }
+$modelName = if ([string]::IsNullOrWhiteSpace([string]$config.paths.metaclip_model_dir)) { [string]$config.backend.model_name } else { Resolve-AicSystemPath -Value ([string]$config.paths.metaclip_model_dir) }
 
 $arguments = @(
     "-u", "-m", "app.lazy_server",
@@ -50,7 +51,7 @@ $arguments = @(
     "--backend", [string]$config.backend.search_backend,
     "--device", [string]$config.backend.device,
     "--gpu-dtype", [string]$config.backend.gpu_dtype,
-    "--model-name", [string]$config.backend.model_name,
+    "--model-name", $modelName,
     "--metaclip-weight", [string]$config.backend.metaclip_weight,
     "--ocr-weight", [string]$config.backend.ocr_weight,
     "--asr-weight", [string]$config.backend.asr_weight,
@@ -71,7 +72,7 @@ Write-Host "============================================================" -Foreg
 Write-Host " AIC2026 Backend: http://$($config.backend.host):$($config.backend.port)" -ForegroundColor Green
 Write-Host " Keyframes:  $env:AIC_KEYFRAMES_ROOT" -ForegroundColor Cyan
 Write-Host " Thumbnails: $env:AIC_THUMBNAILS_ROOT" -ForegroundColor Cyan
-Write-Host " Model:  $($config.backend.model_name)" -ForegroundColor Cyan
+Write-Host " Model:  $modelName" -ForegroundColor Cyan
 Write-Host "============================================================" -ForegroundColor Green
 
 Push-Location (Join-Path $PSScriptRoot "backend")

@@ -9,6 +9,7 @@
     "video_ranges": "backend/artifacts/current_index/video_ranges.json",
     "index_config": "backend/artifacts/current_index/index_config.json",
     "metaclip_embeddings": "backend/embeddings.npy",
+    "metaclip_model_dir": "",
     "beit3_embeddings": "merged_beit3_large_numeric/embeddings.npy",
     "beit3_checkpoint": "beit3_runtime/beit3_large_itc_patch16_224.pth",
     "beit3_sentencepiece": "beit3_runtime/beit3.spm",

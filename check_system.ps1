@@ -69,6 +69,9 @@ if ($Scope -in @("All", "Backend")) {
     Test-ConfiguredPath -Name "video_ranges" -Kind "File"
     Test-ConfiguredPath -Name "index_config" -Kind "File"
     Test-ConfiguredPath -Name "metaclip_embeddings" -Kind "File"
+    if (-not [string]::IsNullOrWhiteSpace([string]$config.paths.metaclip_model_dir)) {
+        Test-ConfiguredPath -Name "metaclip_model_dir" -Kind "Directory"
+    }
 
     if (Test-AicFeatureEnabled -Config $config -Name "beit3") {
         Test-ConfiguredPath -Name "beit3_embeddings" -Kind "File"

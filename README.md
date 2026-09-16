@@ -2,6 +2,9 @@
 
 Hệ thống truy vấn video đa phương thức tốc độ cao (**Multi-modal Video Retrieval System**) được xây dựng phục vụ cuộc thi **AI Challenge 2026**. Hệ thống tích hợp tìm kiếm hình ảnh (Visual Embeddings), nhận diện văn bản trong ảnh (OCR), nhận diện giọng nói / phụ đề (ASR), tìm kiếm chuỗi sự kiện theo dòng thời gian (Temporal Multi-Stage Search), đồng bộ đội thi thời gian thực qua WebSocket và tích hợp nộp bài tự động qua DRES / CSV.
 
+> Thành viên mới nên đọc [`GITHUB_TUTORIAL.md`](GITHUB_TUTORIAL.md) trước khi commit, pull hoặc push code.
+> Sau khi clone, xem [`RESOURCE_SETUP.md`](RESOURCE_SETUP.md) để giải nén từng ZIP tài nguyên và sửa `system.config.json`.
+
 ---
 
 ## 📑 Mục Lục
@@ -77,6 +80,7 @@ system/
 ├── start_system.ps1                # [Windows] PowerShell khởi động toàn bộ hệ thống All-in-One
 ├── check_system.ps1                # [Windows] Kiểm tra tính hợp lệ của toàn bộ tài nguyên hệ thống
 ├── system.config.json              # File cấu hình trung tâm (đường dẫn, port, GPU, model, features)
+├── RESOURCE_SETUP.md               # Hướng dẫn giải nén ZIP và cấu hình đường dẫn tài nguyên
 ├── requirements.txt                # Danh sách thư viện Python cần thiết
 ├── .gitignore                      # Bộ lọc loại trừ file nặng khi đẩy lên GitHub
 └── README.md                       # Tài liệu hướng dẫn sử dụng và cấu trúc hệ thống
@@ -263,7 +267,7 @@ Hệ thống được thiết kế với cơ chế kiểm tra tài nguyên độ
 Đây là mô hình chuẩn tối ưu nhất cho đội thi: **Backend tính toán AI đặt trên máy chủ GPU** và **mỗi thành viên sử dụng máy cá nhân (Laptop/PC) mở Frontend** để tìm kiếm, chia sẻ và đồng bộ dữ liệu.
 
 ```
-[ GPU Server: 192.168.20.156 ]                 [ Local PC của Thành Viên ]
+[ GPU Server ]                                 [ Local PC của Thành Viên ]
 +----------------------------+                 +----------------------------+
 |  run_backend.sh            |  REST API 8036  |  start_frontend.bat        |
 |  - MetaCLIP-2 + BEiT-3     | <-------------- |  - Fast Web UI (Port 8080) |
@@ -278,29 +282,21 @@ cd system
 bash run_backend.sh
 ```
 * Script tự động tìm môi trường Python (Conda hoặc `.venv`), cấu hình GPU 0 (có thể ghi đè qua `GPU_ID=1 bash run_backend.sh`), bind cổng `0.0.0.0:8036`.
+* `run_backend.sh` là launcher cũ, dùng các biến đường dẫn trong chính script chứ chưa đọc `system.config.json`. Nếu đưa backend lên Linux với thư mục khác, sửa các biến `RECORDS_DB`, `VIDEO_RANGES`, `EMBEDDINGS`, `CONFIG_JSON`, `ASR_INDEX`, `OCR_INDEX`, `BEIT3_DIR`, `BEIT3_RUNTIME` và tham số `--model-name` trong file này.
 * Tiến trình được tự động ngụy trang với tên **`aic_system`** trên `nvitop` và `nvidia-smi` để quản lý tập trung và bảo mật khi thi đấu.
 
 #### 💻 Bước 2: Khởi động Frontend trên Máy Cá Nhân (Windows)
-1. Mở file `start_frontend.bat` bằng text editor (Notepad, VS Code,...):
-   * Đặt đường dẫn chứa keyframes trên máy cá nhân:
-     ```bat
-     set "KEYFRAMES_DIR=D:\keyframes_AIC_2026"
-     ```
-   * Kiểm tra địa chỉ Server Backend (mặc định đã cấu hình sẵn IP server):
-     ```bat
-     set "BACKEND_URL=http://192.168.20.156:8036"
-     set "HLS_URL=http://192.168.20.156:8052"
-     ```
+1. Mở `system.config.json` và sửa `paths.keyframes_root`, `paths.thumbnails_root`, `frontend.backend_url` và `frontend.hls_server_url` theo máy của bạn. Xem bảng chi tiết trong [`RESOURCE_SETUP.md`](RESOURCE_SETUP.md).
 2. Nhấp đúp chuột chạy file **`start_frontend.bat`** (hoặc chạy `.\start_frontend.ps1`).
 3. Mở trình duyệt web truy cập: **`http://127.0.0.1:8080`**.
 
 > [!TIP]
 > **Khi làm việc từ xa / không chung mạng LAN (Dùng SSH Tunnel):**
-> Nếu bạn ở nhà hoặc ngoài mạng nội bộ của server `192.168.20.156`, hãy mở một cửa sổ Command Prompt / Terminal trên máy cá nhân và gõ lệnh:
+> Nếu bạn ở ngoài mạng nội bộ của server, hãy mở một cửa sổ Command Prompt / Terminal trên máy cá nhân và gõ lệnh:
 > ```bash
 > ssh -L 8036:127.0.0.1:8036 -L 8052:127.0.0.1:8052 <username>@<ip_server_hoac_ten_mien>
 > ```
-> Khi đường hầm SSH đã thiết lập, trong file `start_frontend.bat` chỉ cần trỏ `BACKEND_URL=http://127.0.0.1:8036` và `HLS_URL=http://127.0.0.1:8052`. Toàn bộ dữ liệu truy vấn sẽ được mã hóa và truyền an toàn qua cổng 8036 cục bộ về máy chủ.
+> Khi đường hầm SSH đã thiết lập, đặt `frontend.backend_url` là `http://127.0.0.1:8036` và `frontend.hls_server_url` là `http://127.0.0.1:8052` trong `system.config.json`. Toàn bộ dữ liệu truy vấn sẽ đi qua đường hầm SSH.
 
 ---
 
@@ -309,6 +305,7 @@ bash run_backend.sh
 Dành cho trường hợp máy cá nhân có GPU NVIDIA rời (VRAM >= 8GB) và chứa đầy đủ cả Model, Vector lẫn Keyframes.
 
 #### Cách 2.1: Khởi chạy 1-Click bằng Batch Scripts (.bat)
+Hai file `.bat` chỉ gọi script PowerShell tương ứng, nên đều dùng `system.config.json` thay vì chứa đường dẫn/IP riêng.
 1. Nhấp đúp chạy file **`start_backend.bat`** (Mở Backend AI lắng nghe tại `http://127.0.0.1:8036`).
 2. Nhấp đúp chạy file **`start_frontend.bat`** (Mở Frontend Web Gateway tại `http://127.0.0.1:8080`).
 
@@ -318,6 +315,7 @@ Mọi đường dẫn, cổng, model và tính năng quan trọng nằm trong `s
 - `paths.keyframes_root`: thư mục gốc chứa ảnh đầy đủ (ưu tiên `.jpg`).
 - `paths.thumbnails_root`: thư mục gốc chứa thumbnail (ưu tiên `.webp`).
 - Nếu chưa tách thumbnail riêng, cho hai giá trị trỏ tới cùng một thư mục.
+- `paths.metaclip_model_dir`: để rỗng nếu tải model theo `backend.model_name`, hoặc đặt đường dẫn tới model giải nén từ ZIP `14` (xem `RESOURCE_SETUP.md`).
 - Nếu dùng virtual environment, đặt đường dẫn trong config: `"python_executable": ".venv/Scripts/python.exe"`.
 
 Thao tác khởi chạy:
