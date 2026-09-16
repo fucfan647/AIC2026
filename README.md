@@ -14,8 +14,10 @@ Hệ thống truy vấn video đa phương thức tốc độ cao (**Multi-modal
 3. [Quy Tắc Quản Lý Dữ Liệu Nặng & `.gitignore`](#-quy-tắc-quản-lý-dữ-liệu-nặng--gitignore)
 4. [Yêu Cầu Hệ Thống & Cài Đặt](#-yêu-cầu-hệ-thống--cài-đặt)
 5. [Hướng Dẫn Khởi Chạy Hệ Thống](#-hướng-dẫn-khởi-chạy-hệ-thống)
-   - [Cách 1: Khởi chạy 1-Click bằng PowerShell (Khuyên dùng)](#cách-1-khởi-chạy-1-click-bằng-powershell-khuyên-dùng)
-   - [Cách 2: Khởi chạy thủ công qua Terminal](#cách-2-khởi-chạy-thủ-công-qua-terminal)
+   - [Cơ Chế Quét & Kiểm Tra Tài Nguyên](#-cơ-chế-quét--kiểm-tra-tài-nguyên)
+   - [Kịch Bản 1: Mô Hình Phân Tán (Server GPU + Local PC) - Khuyên Dùng Khi Thi Đấu](#-kịch-bản-1-mô-hình-phân-tán-server-gpu--local-pc---khuyên-dùng-khi-thi-đấu)
+   - [Kịch Bản 2: Chạy All-in-One Trên Một Máy Cá Nhân (PowerShell / Batch)](#-kịch-bản-2-chạy-all-in-one-trên-một-máy-cá-nhân-powershell--batch)
+   - [Kịch Bản 3: Khởi Chạy Thủ Công Qua Terminal](#-kịch-bản-3-khởi-chạy-thủ-công-qua-terminal)
 6. [Luồng Hoạt Động Của Hệ Thống (Data & Workflow)](#-luồng-hoạt-động-của-hệ-thống-data--workflow)
 7. [Bảng Phím Tắt Tiện Ích (Hotkeys)](#-bảng-phím-tắt-tiện-ích-hotkeys)
 8. [Hướng Dẫn Đẩy Mã Nguồn Lên GitHub](#-hướng-dẫn-đẩy-mã-nguồn-lên-github)
@@ -60,13 +62,21 @@ Hệ thống được thiết kế theo mô hình kiến trúc phân tán hiệu
 ### Thư mục Gốc (Root)
 
 ```text
-D:\Folder\AICHALLENGE2026\system/
-├── backend/                        # Module Backend AI Retrieval Engine
-├── frontend/                       # Module Frontend Web SPA & Gateway Server
+system/
+├── backend/                        # Module Backend AI Retrieval Engine (MetaCLIP-2, BEiT-3, OCR, ASR)
+├── frontend/                       # Module Frontend Web SPA & FastAPI Gateway Server
 ├── beit3_runtime/                  # Mã nguồn môi trường & tokenizer cho mô hình BEiT-3
 ├── merged_beit3_large_numeric/     # (Local) Checkpoints & Embeddings BEiT-3
-├── start_backend.ps1               # Script PowerShell 1-Click khởi động Backend
-├── start_frontend.ps1              # Script PowerShell 1-Click khởi động Frontend
+├── scripts/                        # Thư viện script hỗ trợ PowerShell (system_common.ps1)
+├── run_backend.sh                  # [Linux] Khởi động Backend trên Server GPU (mask tên aic_system)
+├── run_frontend.sh                 # [Linux] Khởi động Frontend Gateway trên Server
+├── start_backend.bat               # [Windows] Batch 1-Click khởi động Backend
+├── start_frontend.bat              # [Windows] Batch 1-Click khởi động Frontend (nối Server GPU + Local frames)
+├── start_backend.ps1               # [Windows] PowerShell 1-Click khởi động Backend
+├── start_frontend.ps1              # [Windows] PowerShell 1-Click khởi động Frontend
+├── start_system.ps1                # [Windows] PowerShell khởi động toàn bộ hệ thống All-in-One
+├── check_system.ps1                # [Windows] Kiểm tra tính hợp lệ của toàn bộ tài nguyên hệ thống
+├── system.config.json              # File cấu hình trung tâm (đường dẫn, port, GPU, model, features)
 ├── requirements.txt                # Danh sách thư viện Python cần thiết
 ├── .gitignore                      # Bộ lọc loại trừ file nặng khi đẩy lên GitHub
 └── README.md                       # Tài liệu hướng dẫn sử dụng và cấu trúc hệ thống
@@ -196,7 +206,7 @@ frontend/
 
 ## 🚫 Quy Tắc Quản Lý Dữ Liệu Nặng & `.gitignore`
 
-Để đảm bảo không vượt quá giới hạn **100MB** của GitHub và giữ repository luôn gọn nhẹ, file [`.gitignore`](file:///d:/Folder/AICHALLENGE2026/system/.gitignore) đã được quét và cấu hình loại trừ:
+Để đảm bảo không vượt quá giới hạn **100MB** của GitHub và giữ repository luôn gọn nhẹ, file [`.gitignore`](.gitignore) đã được quét và cấu hình loại trừ:
 
 | Nhóm dữ liệu | Các mẫu tệp / thư mục bị loại trừ | Lý do loại trừ |
 | :--- | :--- | :--- |
@@ -230,112 +240,147 @@ pip install -r requirements.txt
 
 ## 🚀 Hướng Dẫn Khởi Chạy Hệ Thống
 
-### Cách 1: Khởi chạy 1-Click bằng PowerShell (Khuyên dùng)
+### 🔍 Cơ Chế Quét & Kiểm Tra Tài Nguyên
 
-Mọi đường dẫn, cổng, model và tính năng quan trọng nằm trong `system.config.json`. Đường dẫn tương đối được tính từ thư mục `system`, vì vậy mỗi thành viên chỉ cần sửa một file sau khi tải model và dữ liệu về.
+Hệ thống được thiết kế với cơ chế kiểm tra tài nguyên độc lập giữa khâu cấu hình, khâu Backend AI và khâu Frontend Web:
 
-#### Cấu hình đường dẫn keyframe và thumbnail
-
-Tên thư mục dữ liệu không bị cố định và không bắt buộc phải là `synthetic_frames`:
-
-- `paths.keyframes_root`: thư mục gốc chứa ảnh đầy đủ.
-- `paths.thumbnails_root`: thư mục gốc chứa thumbnail.
-- Hai đường dẫn có thể giống nhau, khác thư mục hoặc nằm trên hai ổ đĩa khác nhau.
-- Keyframe ưu tiên `.jpg`; thumbnail ưu tiên `.webp`. Cả hai route vẫn đọc được `.jpg`, `.jpeg`, `.webp` và `.png`.
-- Cấu trúc bên dưới mỗi thư mục là `<video_id>/<frame_number>.<extension>`, ví dụ `L21_V001/001.jpg`.
-
-Ví dụ dùng hai thư mục riêng:
-
-```json
-"keyframes_root": "F:/datasets/aic/full_images",
-"thumbnails_root": "D:/aic_cache/thumbnails_webp"
-```
-
-Nếu chưa tạo thumbnail riêng, cho hai giá trị trỏ tới cùng một thư mục:
-
-```json
-"keyframes_root": "F:/datasets/aic/frames",
-"thumbnails_root": "F:/datasets/aic/frames"
-```
-
-Kiểm tra trước khi chạy:
-
-```powershell
-.\check_system.ps1
-```
-
-Script sẽ kiểm tra source, model, embedding, database, frame, thư viện Python và CUDA. Asset của tính năng đang tắt được bỏ qua; `excluded_rows` và dữ liệu chỉ phục vụ frontend được báo là tùy chọn.
-
-Ba chế độ khởi động:
-
-1. **Khởi động Backend AI Engine**:
-   * Chạy `.\start_backend.ps1`.
-   * *Backend sẽ khởi động tại địa chỉ `http://127.0.0.1:8036` trên GPU CUDA.*
-
-2. **Khởi động Frontend Gateway & Web UI**:
-   * Chạy `.\start_frontend.ps1`.
-   * *Frontend Web sẽ mở tại địa chỉ `http://127.0.0.1:8080`.*
-
-3. **Khởi động toàn hệ thống**:
-   * Chạy `.\start_system.ps1`.
-   * Backend mở trong cửa sổ PowerShell riêng; frontend chạy ở cửa sổ hiện tại. Khi frontend dừng, backend do script này tạo cũng được dừng.
-
-Nếu dùng virtual environment, đặt đường dẫn trong config, ví dụ:
-
-```json
-"runtime": {
-  "python_executable": ".venv/Scripts/python.exe"
-}
-```
-
-Mặc định `features.ppocr` đang là `false` vì gói source hiện tại chưa có `paddle_ocr.sqlite`. Sau khi tải index PP-OCR, sửa `paths.ppocr_index` và chuyển cờ này thành `true`.
+1. **Kiểm tra trước khi chạy (Pre-flight Check)**:
+   * Chạy script `.\check_system.ps1` (trên Windows PowerShell).
+   * Script sẽ quét toàn bộ file weights, checkpoints, các mảng vector `.npy`, database SQLite, keyframes, virtual environment và CUDA GPU. Báo cáo rõ ràng thành phần nào thiếu hoặc tùy chọn.
+2. **Khi Backend khởi động (`lazy_server.py`)**:
+   * Kiểm tra thiết bị CUDA GPU và cấp phát VRAM.
+   * Quét và nạp ma trận vector (`embeddings.npy`) vào GPU Tensor VRAM (~4-5GB VRAM cho cả 2 model MetaCLIP-2 và BEiT-3).
+   * Kết nối SQLite metadata (`records.sqlite`), text OCR (`monkey_ocr.sqlite`) và giọng nói (`asr.sqlite`).
+3. **Khi Frontend khởi động (`serve_frontend.py`)**:
+   * Quét thư mục ảnh Keyframes (`paths.keyframes_root` hoặc tham số `--keyframes-dir` / `--keyframe-root`).
+   * **Cơ chế Zero-Network Local SSD Rendering**: Frontend ưu tiên đọc trực tiếp ảnh từ ổ đĩa cứng của máy cá nhân (Local SSD/HDD) mà không cần nạp qua mạng từ Server, giúp thao tác duyệt hàng trăm frame đạt độ trễ ~0ms.
+   * **Tự động Fallback**: Nếu một frame bất kỳ chưa có trong ổ cứng cá nhân, Gateway sẽ tự động chuyển tiếp request để tải ảnh từ Backend Server về đệm.
 
 ---
 
-### Cách 2: Khởi chạy thủ công qua Terminal
+### 🌐 Kịch Bản 1: Mô Hình Phân Tán (Server GPU + Local PC) - Khuyên Dùng Khi Thi Đấu
 
-#### 🔹 Bước 1: Khởi động Backend (Port 8036)
-```powershell
-cd D:\Folder\AICHALLENGE2026\system\backend
+Đây là mô hình chuẩn tối ưu nhất cho đội thi: **Backend tính toán AI đặt trên máy chủ GPU** và **mỗi thành viên sử dụng máy cá nhân (Laptop/PC) mở Frontend** để tìm kiếm, chia sẻ và đồng bộ dữ liệu.
 
-python -u -m app.lazy_server `
-  --records-db "artifacts/current_index/records.sqlite" `
-  --video-ranges "artifacts/current_index/video_ranges.json" `
-  --embeddings "embeddings.npy" `
-  --beit3-embeddings "..\merged_beit3_large_numeric\embeddings.npy" `
-  --beit3-checkpoint "..\beit3_runtime\beit3_large_itc_patch16_224.pth" `
-  --beit3-sentencepiece "..\beit3_runtime\beit3.spm" `
-  --beit3-runtime-python "..\beit3_runtime\python" `
-  --config "artifacts/current_index/index_config.json" `
-  --asr-index "artifacts/asr_index/asr.sqlite" `
-  --ocr-index "artifacts/current_index/monkey_ocr.sqlite" `
-  --monkey-ocr-index "artifacts/current_index/monkey_ocr.sqlite" `
-  --host 127.0.0.1 `
-  --port 8036 `
-  --storage-backend file `
-  --backend torch-gpu `
-  --device cuda `
-  --gpu-dtype float16 `
-  --model-name "facebook/metaclip-2-worldwide-b16-384" `
-  --enable-temporal-search
+```
+[ GPU Server: 192.168.20.156 ]                 [ Local PC của Thành Viên ]
++----------------------------+                 +----------------------------+
+|  run_backend.sh            |  REST API 8036  |  start_frontend.bat        |
+|  - MetaCLIP-2 + BEiT-3     | <-------------- |  - Fast Web UI (Port 8080) |
+|  - Process: aic_system     |                 |  - Keyframes nạp từ SSD    |
++----------------------------+                 +----------------------------+
 ```
 
-#### 🔹 Bước 2: Khởi động Frontend Server (Port 8080)
-```powershell
-cd D:\Folder\AICHALLENGE2026\system\frontend
+#### 🖥️ Bước 1: Khởi động Backend trên Server GPU (Linux)
+Trên máy chủ Linux có GPU:
+```bash
+cd system
+bash run_backend.sh
+```
+* Script tự động tìm môi trường Python (Conda hoặc `.venv`), cấu hình GPU 0 (có thể ghi đè qua `GPU_ID=1 bash run_backend.sh`), bind cổng `0.0.0.0:8036`.
+* Tiến trình được tự động ngụy trang với tên **`aic_system`** trên `nvitop` và `nvidia-smi` để quản lý tập trung và bảo mật khi thi đấu.
 
-python -u serve_frontend.py `
-  --host 0.0.0.0 `
-  --port 8080 `
-  --backend-url "http://127.0.0.1:8036" `
-  --hls-server-url "http://127.0.0.1:8052" `
-  --deleted-manifest "..\backend\artifacts\current_index\active_deleted_manifest.jsonl"
+#### 💻 Bước 2: Khởi động Frontend trên Máy Cá Nhân (Windows)
+1. Mở file `start_frontend.bat` bằng text editor (Notepad, VS Code,...):
+   * Đặt đường dẫn chứa keyframes trên máy cá nhân:
+     ```bat
+     set "KEYFRAMES_DIR=D:\keyframes_AIC_2026"
+     ```
+   * Kiểm tra địa chỉ Server Backend (mặc định đã cấu hình sẵn IP server):
+     ```bat
+     set "BACKEND_URL=http://192.168.20.156:8036"
+     set "HLS_URL=http://192.168.20.156:8052"
+     ```
+2. Nhấp đúp chuột chạy file **`start_frontend.bat`** (hoặc chạy `.\start_frontend.ps1`).
+3. Mở trình duyệt web truy cập: **`http://127.0.0.1:8080`**.
+
+> [!TIP]
+> **Khi làm việc từ xa / không chung mạng LAN (Dùng SSH Tunnel):**
+> Nếu bạn ở nhà hoặc ngoài mạng nội bộ của server `192.168.20.156`, hãy mở một cửa sổ Command Prompt / Terminal trên máy cá nhân và gõ lệnh:
+> ```bash
+> ssh -L 8036:127.0.0.1:8036 -L 8052:127.0.0.1:8052 <username>@<ip_server_hoac_ten_mien>
+> ```
+> Khi đường hầm SSH đã thiết lập, trong file `start_frontend.bat` chỉ cần trỏ `BACKEND_URL=http://127.0.0.1:8036` và `HLS_URL=http://127.0.0.1:8052`. Toàn bộ dữ liệu truy vấn sẽ được mã hóa và truyền an toàn qua cổng 8036 cục bộ về máy chủ.
+
+---
+
+### 💻 Kịch Bản 2: Chạy All-in-One Trên Một Máy Cá Nhân (PowerShell / Batch)
+
+Dành cho trường hợp máy cá nhân có GPU NVIDIA rời (VRAM >= 8GB) và chứa đầy đủ cả Model, Vector lẫn Keyframes.
+
+#### Cách 2.1: Khởi chạy 1-Click bằng Batch Scripts (.bat)
+1. Nhấp đúp chạy file **`start_backend.bat`** (Mở Backend AI lắng nghe tại `http://127.0.0.1:8036`).
+2. Nhấp đúp chạy file **`start_frontend.bat`** (Mở Frontend Web Gateway tại `http://127.0.0.1:8080`).
+
+#### Cách 2.2: Khởi chạy qua PowerShell & File Cấu Hình (`system.config.json`)
+Mọi đường dẫn, cổng, model và tính năng quan trọng nằm trong `system.config.json`. Đường dẫn tương đối được tính từ thư mục `system`, vì vậy mỗi thành viên chỉ cần sửa một file sau khi tải model và dữ liệu về:
+
+- `paths.keyframes_root`: thư mục gốc chứa ảnh đầy đủ (ưu tiên `.jpg`).
+- `paths.thumbnails_root`: thư mục gốc chứa thumbnail (ưu tiên `.webp`).
+- Nếu chưa tách thumbnail riêng, cho hai giá trị trỏ tới cùng một thư mục.
+- Nếu dùng virtual environment, đặt đường dẫn trong config: `"python_executable": ".venv/Scripts/python.exe"`.
+
+Thao tác khởi chạy:
+```powershell
+# 1. Kiểm tra tài nguyên toàn diện trước khi khởi động
+.\check_system.ps1
+
+# 2. Khởi chạy toàn bộ hệ thống (Backend mở cửa sổ riêng, Frontend chạy ở cửa sổ hiện tại)
+.\start_system.ps1
+```
+*(Bạn cũng có thể chạy riêng từng thành phần bằng `.\start_backend.ps1` hoặc `.\start_frontend.ps1`).*
+
+---
+
+### ⌨️ Kịch Bản 3: Khởi Chạy Thủ Công Qua Terminal
+
+Dành cho môi trường lập trình viên tùy biến tham số trực tiếp qua dòng lệnh.
+
+#### 🔹 Bước 1: Khởi động Backend (Port 8036)
+```bash
+cd backend
+
+python -u -m app.lazy_server \
+  --records-db "artifacts/current_index/records.sqlite" \
+  --video-ranges "artifacts/current_index/video_ranges.json" \
+  --embeddings "embeddings.npy" \
+  --beit3-embeddings "../merged_beit3_large_numeric/embeddings.npy" \
+  --beit3-checkpoint "../beit3_runtime/beit3_large_itc_patch16_224.pth" \
+  --beit3-sentencepiece "../beit3_runtime/beit3.spm" \
+  --beit3-runtime-python "../beit3_runtime/python" \
+  --config "artifacts/current_index/index_config.json" \
+  --asr-index "artifacts/asr_index/asr.sqlite" \
+  --ocr-index "artifacts/current_index/monkey_ocr.sqlite" \
+  --monkey-ocr-index "artifacts/current_index/monkey_ocr.sqlite" \
+  --host 0.0.0.0 \
+  --port 8036 \
+  --storage-backend file \
+  --backend torch-gpu \
+  --device cuda \
+  --gpu-dtype float16 \
+  --model-name "facebook/metaclip-2-worldwide-b16-384" \
+  --enable-temporal-search \
+  --proctitle "aic_system"
+```
+*(Trên Windows PowerShell, thay dấu gạch chéo ngược `\` ở cuối dòng bằng dấu huyền `` ` ``).*
+
+#### 🔹 Bước 2: Khởi động Frontend Server (Port 8080)
+```bash
+cd frontend
+
+python -u serve_frontend.py \
+  --host 0.0.0.0 \
+  --port 8080 \
+  --backend-url "http://127.0.0.1:8036" \
+  --hls-server-url "http://127.0.0.1:8052" \
+  --keyframes-dir "D:/keyframes_AIC_2026" \
+  --deleted-manifest "../backend/artifacts/current_index/active_deleted_manifest.jsonl"
 ```
 
 #### 🔹 Bước 3: Truy cập Web UI
 * Mở trình duyệt web và truy cập: **`http://127.0.0.1:8080/`**
-* Video stream HLS được định tuyến qua cổng: `8052` (kết nối tunnel).
-* Ảnh Keyframes & Thumbnails nạp trực tiếp từ ổ cứng: `D:\Folder\AICHALLENGE2026\keyframes_AIC_2026`.
+* Video stream HLS được định tuyến qua cổng: `8052`.
+* Ảnh Keyframes nạp trực tiếp siêu tốc từ đường dẫn cấu hình.
 
 ---
 
@@ -372,7 +417,7 @@ Do các file nặng đã được `.gitignore` xử lý triệt để, bạn có
 
 ```bash
 # 1. Di chuyển vào thư mục system
-cd D:\Folder\AICHALLENGE2026\system
+cd system
 
 # 2. Kiểm tra trạng thái các file (đảm bảo không còn file nặng >100MB)
 git status
