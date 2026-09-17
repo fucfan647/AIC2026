@@ -2771,10 +2771,17 @@ input[type="range"] {
   cursor: grab;
   touch-action: pan-y;
   scroll-behavior: auto;
+  will-change: scroll-position;
 }
 
-.video-frame-strip.is-scrubbing {
+.video-frame-strip.is-scrubbing,
+.video-frame-strip.is-gliding {
   cursor: grabbing;
+}
+
+.video-frame-strip.is-scrubbing *,
+.video-frame-strip.is-gliding * {
+  pointer-events: none !important;
 }
 
 .video-strip-needle {
@@ -2820,7 +2827,8 @@ input[type="range"] {
   margin: 0;
   -webkit-user-drag: none;
   user-drag: none;
-  transition: filter 0.15s ease, opacity 0.15s ease;
+  transition: transform 0.16s cubic-bezier(0.2, 0.8, 0.3, 1), filter 0.15s ease, box-shadow 0.16s ease;
+  will-change: transform;
 }
 
 .video-frame-thumb:last-child {
@@ -2855,13 +2863,14 @@ input[type="range"] {
   z-index: 2;
 }
 
-/* Playhead active frame styling */
+/* Playhead active frame styling with tactile card lift */
 .video-frame-thumb.is-active {
   z-index: 6;
   outline: 2.5px solid #ff2035;
   outline-offset: -2.5px;
-  filter: brightness(1.15);
-  box-shadow: 0 0 12px rgba(255, 32, 53, 0.45);
+  filter: brightness(1.18);
+  box-shadow: 0 4px 18px rgba(255, 32, 53, 0.55);
+  transform: scale(1.03);
 }
 
 .video-frame-thumb .playhead-needle {
