@@ -1186,6 +1186,26 @@ function sortResults(results) {
   );
 }
 
+function groupShotSuggestions(results, limit) {
+  const groups = new Map();
+  for (const item of sortResults(results)) {
+    const key = item.shot_id == null
+      ? `frame:${item.keyframe_id}`
+      : `shot:${normalizeVideoId(item.video_id)}:${item.shot_id}`;
+    if (!groups.has(key)) groups.set(key, []);
+    const frames = groups.get(key);
+    if (frames.length < 5) frames.push(item);
+  }
+  return [...groups.values()]
+    .sort((left, right) =>
+      Math.max(...right.map(item => Number(item.cosine_similarity ?? item.score ?? 0)))
+      - Math.max(...left.map(item => Number(item.cosine_similarity ?? item.score ?? 0)))
+    )
+    .flat()
+    .slice(0, limit)
+    .map((item, index) => ({...item, rank: index + 1}));
+}
+
 function syncFusionWeights() {
   // Fusion weight summary is rendered and synced per stage card in renderStages()
 }
@@ -2127,7 +2147,7 @@ function renderResults() {
   els.results.innerHTML = '';
   els.results.classList.remove('temporal-results');
   els.results.classList.toggle('multi-results', state.searchMode === 'multi');
-  sortResults(state.results).forEach((item, index) => {
+  (state.searchMode === 'multi' ? sortResults(state.results) : state.results).forEach((item, index) => {
     const canSubmit = Boolean(
       (state.submissionMode === 'csv' && activeQuery())
       || (state.submissionMode === 'dres' && state.dresSessionId && state.dresSelectedEvaluationId)
@@ -3469,6 +3489,7 @@ async function performSearch(requestedTemporalStageIndex = null, translatedQuery
     && ((!query && !ocrQuery && !asrQuery) || state.queryMode === 'similarity');
   const videoFilter = collectVideoFilter();
   const top_k = searchTopK();
+  const requestTopK = !temporal && !multi ? top_k * 3 : top_k;
   const invalidMultiQuery = multi && (
     queries.length < 2
     || queries.length > 5
@@ -3518,14 +3539,14 @@ async function performSearch(requestedTemporalStageIndex = null, translatedQuery
           query: state.similarityQuery.trim(),
           image_weight: (100 - state.similarityTextWeight) / 100,
           text_weight: state.similarityTextWeight / 100,
-          top_k,
+          top_k: requestTopK,
           video_id: videoFilter || undefined,
           search_mode: 'similarity',
           embedding_model: state.embeddingModel
         } : asrOnly && !multi ? {
           query: '',
           asr_query: asrQuery,
-          top_k,
+          top_k: requestTopK,
           video_id: videoFilter || undefined,
           search_mode: 'hybrid',
           embedding_model: state.embeddingModel,
@@ -3538,7 +3559,7 @@ async function performSearch(requestedTemporalStageIndex = null, translatedQuery
           ocr_query: multi ? undefined : ocrQuery,
           asr_query: multi ? undefined : asrQuery,
           queries: multi ? queries : undefined,
-          top_k,
+          top_k: requestTopK,
           video_id: videoFilter || undefined,
           search_mode: 'hybrid',
           embedding_model: state.embeddingModel,
@@ -3641,7 +3662,11 @@ async function performSearch(requestedTemporalStageIndex = null, translatedQuery
           };
         })
       : (payload.results || []).map(item => ({...item, stage: 1}));
-    state.results = applyVideoFilter(backendResults, videoFilter).slice(0, temporal ? 200 : top_k);
+    const filteredResults = applyVideoFilter(backendResults, videoFilter);
+    state.results = temporal
+      ? filteredResults.slice(0, 200)
+      : multi ? filteredResults.slice(0, top_k)
+      : groupShotSuggestions(filteredResults, top_k);
     const renderStarted = performance.now();
     renderStages();
     syncSearchModeControls();

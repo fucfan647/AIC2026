@@ -32,6 +32,14 @@ trong phần `paths` của `system.config.json`, và đặt `backend.local_files
 
 `15_ppocr_raw_output.zip`: chỉ là **output OCR thô**, không phải SQLite index dùng để tìm kiếm. Nếu cần lưu/khai thác output này, giải nén vào thư mục `OCR_preprocess/` bên cạnh `system/`. Giữ `features.ppocr: false`; không bật lên chỉ vì đã giải nén gói này.
 
+Nếu gói `09` và `10` được tạo **trước bản BM25 giữ dấu**, chạy một lần tại thư mục `system/` sau khi giải nén:
+
+```powershell
+python backend/reindex_accent_bm25.py --monkey-index backend/artifacts/current_index/monkey_ocr.sqlite --asr-index backend/artifacts/asr_index/asr.sqlite
+```
+
+Script đổi index MonkeyOCR và Chunkformer sang BM25 phân biệt dấu, giữ các bản SQLite cũ dưới đuôi `.before_accent.bak`. Không cần chạy với PaddleOCR: index Paddle vẫn tìm theo kiểu bỏ dấu. Nếu dùng index cũ mà chưa reindex, backend sẽ báo lỗi rõ ràng khi tải index.
+
 ## 2. Sửa cấu hình theo máy
 
 Mở `system.config.json` và sửa các giá trị sau nếu vị trí tài nguyên khác bảng trên. Mọi `paths.*` tương đối đều tính từ thư mục `system/`; cũng có thể dùng đường dẫn tuyệt đối. Nên giữ đường dẫn tương đối khi cùng chia sẻ config qua Git.

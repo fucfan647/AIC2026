@@ -23,8 +23,9 @@ def fold_ocr_text(value: str) -> str:
     return "".join(char for char in normalized if unicodedata.category(char) != "Mn")
 
 
-def build_fts_query(query: str) -> str:
-    tokens = [token for token in _TOKEN_RE.findall(fold_ocr_text(query)) if token]
+def build_fts_query(query: str, *, preserve_diacritics: bool = False) -> str:
+    text = normalize_ocr_text(query) if preserve_diacritics else fold_ocr_text(query)
+    tokens = [token for token in _TOKEN_RE.findall(text) if token]
     if not tokens:
         raise ValueError("OCR query contains no searchable tokens")
     escaped = [token.replace('"', '""') for token in tokens]
@@ -97,6 +98,10 @@ class OcrTextIndex:
             str(row["key"]): json.loads(row["value"])
             for row in self.conn.execute("SELECT key, value FROM index_meta")
         }
+        self.preserve_diacritics = self.ocr_model.casefold().startswith("monkey")
+        if self.preserve_diacritics and self.metadata.get("search_diacritics") != "preserve":
+            self.conn.close()
+            raise ValueError(f"MonkeyOCR index needs accent-aware reindexing: {self.path}")
 
     @property
     def num_records(self) -> int:
@@ -133,7 +138,8 @@ class OcrTextIndex:
     ) -> list[OcrHit]:
         if limit is not None and int(limit) <= 0:
             return []
-        params: list[Any] = [build_fts_query(query)]
+        params: list[Any] = [build_fts_query(query, preserve_diacritics=self.preserve_diacritics)]
+        bm25_expression = "bm25(ocr_fts, 1.0)" if self.preserve_diacritics else "bm25(ocr_fts, 1.0, 1.0)"
         video_clause = ""
         if video_id:
             video_clause = " AND f.video_id = ?"
@@ -152,7 +158,7 @@ class OcrTextIndex:
         with self._lock:
             rows = self.conn.execute(
                 f"""
-                SELECT f.*, bm25(ocr_fts, 1.0, 1.0) AS bm25_score
+                SELECT f.*, {bm25_expression} AS bm25_score
                 FROM ocr_fts
                 JOIN ocr_frames AS f ON f.row_id = ocr_fts.rowid
                 WHERE ocr_fts MATCH ?{video_clause}{candidate_clause}
@@ -286,9 +292,17 @@ def build_ocr_index(
     ocr_results_path: Path,
     records_db: Path,
     output_path: Path,
+    ocr_model: str,
     allow_partial: bool = False,
-    ocr_model: str = "unknown",
 ) -> dict[str, Any]:
+    """Build an OCR index for a MonkeyOCR or PaddleOCR model name."""
+    model_name = str(ocr_model).casefold()
+    if model_name.startswith("monkey"):
+        preserve_diacritics = True
+    elif model_name.startswith(("paddle", "ppocr", "pp-ocr")):
+        preserve_diacritics = False
+    else:
+        raise ValueError(f"Unsupported OCR model: {ocr_model}")
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     temp_path = output_path.with_suffix(output_path.suffix + ".tmp")
@@ -319,7 +333,7 @@ def build_ocr_index(
                 for region in regions
                 if region.get("recognition_score") is not None and math.isfinite(float(region["recognition_score"]))
             ]
-            ocr_text = str(result.get("full_text") or result.get("monkey_text") or "").strip()
+            ocr_text = unicodedata.normalize("NFC", str(result.get("full_text") or result.get("monkey_text") or "").strip())
             region_line_count = sum(bool(str(region.get("text") or "").strip()) for region in regions)
             batch.append(
                 (
@@ -375,26 +389,45 @@ def build_ocr_index(
             FROM raw_ocr r JOIN metadata.records m USING (keyframe_id);
             DROP TABLE raw_ocr;
             CREATE INDEX idx_ocr_frames_video_id ON ocr_frames(video_id);
-            CREATE VIRTUAL TABLE ocr_fts USING fts5(
-                ocr_text,
-                normalized_text,
-                content='ocr_frames',
-                content_rowid='row_id',
-                tokenize='unicode61 remove_diacritics 2'
-            );
-            INSERT INTO ocr_fts(rowid, ocr_text, normalized_text)
-            SELECT row_id, ocr_text, normalized_text FROM ocr_frames WHERE normalized_text != '';
             """
         )
+        if preserve_diacritics:
+            conn.executescript(
+                """
+                CREATE VIRTUAL TABLE ocr_fts USING fts5(
+                    ocr_text,
+                    content='ocr_frames',
+                    content_rowid='row_id',
+                    tokenize='unicode61 remove_diacritics 0'
+                );
+                INSERT INTO ocr_fts(rowid, ocr_text)
+                SELECT row_id, ocr_text FROM ocr_frames WHERE ocr_text != '';
+                """
+            )
+        else:
+            conn.executescript(
+                """
+                CREATE VIRTUAL TABLE ocr_fts USING fts5(
+                    ocr_text,
+                    normalized_text,
+                    content='ocr_frames',
+                    content_rowid='row_id',
+                    tokenize='unicode61 remove_diacritics 2'
+                );
+                INSERT INTO ocr_fts(rowid, ocr_text, normalized_text)
+                SELECT row_id, ocr_text, normalized_text FROM ocr_frames WHERE normalized_text != '';
+                """
+            )
         text_count = int(conn.execute("SELECT COUNT(*) FROM ocr_frames WHERE normalized_text != ''").fetchone()[0])
         metadata = {
-            "schema_version": 2,
+            "schema_version": 3 if preserve_diacritics else 2,
             "num_records": raw_count,
             "num_text_records": text_count,
             "source_num_records": metadata_count,
             "coverage_ratio": raw_count / metadata_count if metadata_count else 0.0,
             "is_partial": raw_count != metadata_count,
             "ocr_model": str(ocr_model),
+            "search_diacritics": "preserve" if preserve_diacritics else "fold",
             "source_ocr_results": str(Path(ocr_results_path).resolve()),
             "source_records_db": str(Path(records_db).resolve()),
         }
