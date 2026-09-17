@@ -43,7 +43,10 @@ const state = {
   shotContextCache: new Map(),
   submissionFeedback: new Map(),
   handledSubmissionEvents: new Set(),
-  videoFps: {default_fps: 25, overrides: {}}
+  videoFps: {default_fps: 25, overrides: {}},
+  isScrubbingStrip: false,
+  hasDraggedStrip: false,
+  stripRafId: null
 };
 
 const DRES_CACHE_KEY = 'aic_dres_session_v1';
@@ -117,6 +120,7 @@ const els = {
   videoTrakeSubmitBtn: document.getElementById('videoTrakeSubmitBtn'),
   videoTrakeFrames: document.getElementById('videoTrakeFrames'),
   videoShell: document.getElementById('videoShell'),
+  videoScrubHud: document.getElementById('videoScrubHud'),
   player: document.getElementById('player'),
   videoBackBtn: document.getElementById('videoBackBtn'),
   videoPlayBtn: document.getElementById('videoPlayBtn'),
@@ -1315,7 +1319,7 @@ function updateVideoControls() {
   els.videoVolumeValue.textContent = `${Math.round(effectiveVolume * 100)}%`;
   els.videoTime.textContent = `${formatVideoTime(current)} / ${formatVideoTime(duration)}`;
   els.videoProgress.value = duration > 0 ? String(Math.round((current / duration) * 1000)) : '0';
-  updateVideoFrameStripActive();
+  updateVideoFrameStripActive(true);
 }
 
 function setVideoRate(rate) {
@@ -1417,6 +1421,7 @@ function renderVideoFrameItems(items, activeItem) {
       <img src="/thumbnail/${encodeURIComponent(item.keyframe_id)}" alt="${item.video_id} ${item.frame_id !== undefined ? 'frame ' + item.frame_id : 'shot ' + item.shot_id}" loading="lazy" />
       <span>${labelText}</span>`;
     btn.addEventListener('click', () => {
+      if (state.hasDraggedStrip) return;
       seekVideoToSeconds(seconds, true);
       centerActiveFrameInStrip(true);
     });
@@ -1510,7 +1515,9 @@ function renderVideoFrameStrip(activeItem) {
   });
 }
 
-function updateVideoFrameStripActive() {
+let lastAutoScrollTime = 0;
+
+function updateVideoFrameStripActive(autoScroll = false) {
   if (!els.videoFrameStrip) return;
   const current = Number.isFinite(els.player.currentTime) ? els.player.currentTime : 0;
   let nearest = null;
@@ -1524,7 +1531,177 @@ function updateVideoFrameStripActive() {
     }
     btn.classList.remove('is-active');
   });
-  if (nearest) nearest.classList.add('is-active');
+  if (nearest) {
+    nearest.classList.add('is-active');
+    if (autoScroll && !state.isScrubbingStrip && !els.player.paused) {
+      const now = performance.now();
+      if (now - lastAutoScrollTime > 380) {
+        lastAutoScrollTime = now;
+        centerActiveFrameInStrip(true);
+      }
+    }
+  }
+}
+
+let scrubHudTimer = null;
+function showScrubHud(text, icon = '⏩') {
+  if (!els.videoScrubHud) return;
+  els.videoScrubHud.innerHTML = `<span class="hud-icon">${icon}</span><span>${text}</span>`;
+  els.videoScrubHud.hidden = false;
+  els.videoScrubHud.classList.add('is-visible');
+  if (scrubHudTimer) clearTimeout(scrubHudTimer);
+  scrubHudTimer = setTimeout(() => {
+    els.videoScrubHud.classList.remove('is-visible');
+    setTimeout(() => {
+      if (!els.videoScrubHud.classList.contains('is-visible')) {
+        els.videoScrubHud.hidden = true;
+      }
+    }, 200);
+  }, 750);
+}
+
+function getStripThumbAtClientX(clientX) {
+  if (!els.videoFrameStrip) return null;
+  const thumbs = Array.from(els.videoFrameStrip.querySelectorAll('.video-frame-thumb'));
+  if (thumbs.length === 0) return null;
+
+  for (const thumb of thumbs) {
+    const rect = thumb.getBoundingClientRect();
+    if (clientX >= rect.left && clientX <= rect.right) {
+      return thumb;
+    }
+  }
+
+  let nearest = thumbs[0];
+  let minDist = Infinity;
+  for (const thumb of thumbs) {
+    const rect = thumb.getBoundingClientRect();
+    const midX = rect.left + rect.width / 2;
+    const dist = Math.abs(clientX - midX);
+    if (dist < minDist) {
+      minDist = dist;
+      nearest = thumb;
+    }
+  }
+  return nearest;
+}
+
+let stripDragStartX = 0;
+
+function setupFilmstripScrubbing() {
+  if (!els.videoFrameStrip) return;
+
+  const handlePointerDown = (e) => {
+    if (e.button !== 0 && e.pointerType === 'mouse') return;
+    state.isScrubbingStrip = true;
+    state.hasDraggedStrip = false;
+    stripDragStartX = e.clientX;
+    els.videoFrameStrip.classList.add('is-scrubbing');
+    try {
+      els.videoFrameStrip.setPointerCapture(e.pointerId);
+    } catch (_) {}
+
+    const thumb = getStripThumbAtClientX(e.clientX);
+    if (thumb) {
+      const seconds = Number(thumb.dataset.seconds);
+      if (Number.isFinite(seconds)) {
+        seekVideoToSeconds(seconds, false);
+        updateVideoControls();
+      }
+    }
+  };
+
+  const handlePointerMove = (e) => {
+    if (!state.isScrubbingStrip) return;
+    if (Math.abs(e.clientX - stripDragStartX) > 4) {
+      state.hasDraggedStrip = true;
+    }
+
+    const stripRect = els.videoFrameStrip.getBoundingClientRect();
+    const edgeMargin = 45;
+    if (e.clientX < stripRect.left + edgeMargin) {
+      els.videoFrameStrip.scrollLeft -= 16;
+    } else if (e.clientX > stripRect.right - edgeMargin) {
+      els.videoFrameStrip.scrollLeft += 16;
+    }
+
+    if (state.stripRafId) return;
+    state.stripRafId = requestAnimationFrame(() => {
+      state.stripRafId = null;
+      if (!state.isScrubbingStrip) return;
+      const thumb = getStripThumbAtClientX(e.clientX);
+      if (thumb) {
+        const seconds = Number(thumb.dataset.seconds);
+        if (Number.isFinite(seconds)) {
+          seekVideoToSeconds(seconds, false);
+          updateVideoControls();
+        }
+      }
+    });
+  };
+
+  const handlePointerUp = (e) => {
+    if (!state.isScrubbingStrip) return;
+    state.isScrubbingStrip = false;
+    els.videoFrameStrip.classList.remove('is-scrubbing');
+    try {
+      els.videoFrameStrip.releasePointerCapture(e.pointerId);
+    } catch (_) {}
+
+    if (state.stripRafId) {
+      cancelAnimationFrame(state.stripRafId);
+      state.stripRafId = null;
+    }
+
+    centerActiveFrameInStrip(true);
+    setTimeout(() => {
+      state.hasDraggedStrip = false;
+    }, 50);
+  };
+
+  els.videoFrameStrip.addEventListener('pointerdown', handlePointerDown);
+  els.videoFrameStrip.addEventListener('pointermove', handlePointerMove);
+  els.videoFrameStrip.addEventListener('pointerup', handlePointerUp);
+  els.videoFrameStrip.addEventListener('pointercancel', handlePointerUp);
+}
+
+function handleVideoScrubWheel(e) {
+  if (!els.player) return;
+  e.preventDefault();
+
+  const duration = Number.isFinite(els.player.duration) ? els.player.duration : 0;
+  if (duration <= 0 && (!els.videoFrameStrip || els.videoFrameStrip.children.length === 0)) return;
+
+  // Lướt lên (deltaY < 0): Tua tiến về phía trước
+  // Lướt xuống (deltaY > 0): Tua lùi về phía sau
+  const isForward = e.deltaY < 0;
+
+  const absDelta = Math.abs(e.deltaY);
+  let step = 0.08;
+  if (absDelta > 150) {
+    step = 1.0;
+  } else if (absDelta > 60) {
+    step = 0.4;
+  } else if (absDelta > 25) {
+    step = 0.15;
+  } else {
+    step = 0.05;
+  }
+
+  if (e.shiftKey) step *= 4;
+
+  const current = Number.isFinite(els.player.currentTime) ? els.player.currentTime : 0;
+  const target = Math.max(0, Math.min(duration > 0 ? duration - 0.05 : current + step, current + (isForward ? step : -step)));
+
+  seekVideoToSeconds(target, false);
+  updateVideoControls();
+  centerActiveFrameInStrip(true);
+
+  const icon = isForward ? '⏩' : '⏪';
+  const sign = isForward ? '+' : '-';
+  const activeBtn = els.videoFrameStrip?.querySelector('.video-frame-thumb.is-active');
+  const frameInfo = activeBtn?.dataset.frameId ? ` · Frame ${activeBtn.dataset.frameId}` : '';
+  showScrubHud(`${sign}${step.toFixed(2)}s (${formatVideoTime(target)})${frameInfo}`, icon);
 }
 
 let expandBufferHandler = null;
@@ -4032,6 +4209,15 @@ els.player.addEventListener('timeupdate', updateVideoControls);
 els.player.addEventListener('play', updateVideoControls);
 els.player.addEventListener('pause', updateVideoControls);
 els.player.addEventListener('volumechange', updateVideoControls);
+
+// Mouse Wheel & Trackpad scrubbing on video and filmstrip
+if (els.videoShell) {
+  els.videoShell.addEventListener('wheel', handleVideoScrubWheel, { passive: false });
+}
+if (els.videoFrameStrip) {
+  els.videoFrameStrip.addEventListener('wheel', handleVideoScrubWheel, { passive: false });
+}
+setupFilmstripScrubbing();
 document.addEventListener('keydown', event => {
   const inInput = event.target.matches('input, textarea');
   const key = event.key.toLowerCase();
