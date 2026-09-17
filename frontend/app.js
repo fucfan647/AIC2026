@@ -121,6 +121,9 @@ const els = {
   videoTrakeSubmitBtn: document.getElementById('videoTrakeSubmitBtn'),
   videoTrakeFrames: document.getElementById('videoTrakeFrames'),
   videoShell: document.getElementById('videoShell'),
+  videoFlipbookOverlay: document.getElementById('videoFlipbookOverlay'),
+  videoFlipbookImg: document.getElementById('videoFlipbookImg'),
+  videoFlipbookBadge: document.getElementById('videoFlipbookBadge'),
   videoScrubHud: document.getElementById('videoScrubHud'),
   player: document.getElementById('player'),
   videoBackBtn: document.getElementById('videoBackBtn'),
@@ -1425,6 +1428,7 @@ function renderVideoFrameItems(items, activeItem) {
     btn.dataset.seconds = String(seconds);
     if (item.shot_id !== undefined) btn.dataset.shotId = String(item.shot_id ?? '');
     if (item.frame_id !== undefined) btn.dataset.frameId = String(item.frame_id ?? '');
+    if (item.keyframe_id) btn.dataset.keyframeId = String(item.keyframe_id);
     const titleText = item.frame_id !== undefined
       ? `Frame ${item.frame_id} · ${formatVideoTime(seconds)}`
       : `Shot ${item.shot_id} · ${formatVideoTime(seconds)}`;
@@ -1548,9 +1552,100 @@ function renderVideoFrameStrip(activeItem) {
 }
 
 let lastAutoScrollTime = 0;
+let flipbookDebounceTimer = null;
+let flipbookFadeTimer = null;
+
+function setActiveStripThumb(thumb) {
+  if (!els.videoFrameStrip || !thumb) return;
+  const currentActive = els.videoFrameStrip.querySelector('.video-frame-thumb.is-active');
+  if (currentActive === thumb) return;
+  if (currentActive) currentActive.classList.remove('is-active');
+  thumb.classList.add('is-active');
+}
+
+function findNearestThumbBySeconds(seconds) {
+  if (!els.videoFrameStrip) return null;
+  const thumbs = els.videoFrameStrip.children;
+  const count = thumbs.length;
+  if (count === 0) return null;
+
+  let low = 0;
+  let high = count - 1;
+  let nearest = thumbs[0];
+  let minDiff = Infinity;
+
+  while (low <= high) {
+    const mid = (low + high) >> 1;
+    const thumb = thumbs[mid];
+    const s = Number(thumb.dataset.seconds);
+    const diff = Math.abs(s - seconds);
+    if (diff < minDiff) {
+      minDiff = diff;
+      nearest = thumb;
+    }
+    if (seconds < s) {
+      high = mid - 1;
+    } else if (seconds > s) {
+      low = mid + 1;
+    } else {
+      return thumb;
+    }
+  }
+  return nearest;
+}
+
+function showFlipbookPreview(thumb, seconds) {
+  if (!els.videoFlipbookOverlay || !els.videoFlipbookImg || !thumb) return;
+
+  if (flipbookFadeTimer) {
+    clearTimeout(flipbookFadeTimer);
+    flipbookFadeTimer = null;
+  }
+
+  const imgEl = thumb.querySelector('img');
+  const src = imgEl?.src || (thumb.dataset.keyframeId ? `/thumbnail/${encodeURIComponent(thumb.dataset.keyframeId)}` : '');
+  if (src && els.videoFlipbookImg.src !== src) {
+    els.videoFlipbookImg.src = src;
+  }
+
+  const frameId = thumb.dataset.frameId;
+  const shotId = thumb.dataset.shotId;
+  const timeFormatted = formatVideoTime(seconds);
+  const infoText = frameId !== undefined && frameId !== ''
+    ? `Frame ${frameId} · ${timeFormatted}`
+    : (shotId !== undefined && shotId !== '' ? `Shot ${shotId} · ${timeFormatted}` : timeFormatted);
+
+  if (els.videoFlipbookBadge) {
+    els.videoFlipbookBadge.textContent = infoText;
+  }
+
+  els.videoFlipbookOverlay.hidden = false;
+  els.videoFlipbookOverlay.classList.add('is-visible');
+
+  if (els.videoTime) {
+    const duration = Number.isFinite(els.player.duration) ? els.player.duration : 0;
+    els.videoTime.textContent = `${timeFormatted} / ${formatVideoTime(duration)}`;
+  }
+  if (els.videoProgress && Number.isFinite(els.player.duration) && els.player.duration > 0) {
+    els.videoProgress.value = String(Math.round((seconds / els.player.duration) * 1000));
+  }
+}
+
+function hideFlipbookPreview(delay = 140) {
+  if (!els.videoFlipbookOverlay) return;
+  if (flipbookFadeTimer) clearTimeout(flipbookFadeTimer);
+  flipbookFadeTimer = setTimeout(() => {
+    els.videoFlipbookOverlay.classList.remove('is-visible');
+    setTimeout(() => {
+      if (!els.videoFlipbookOverlay.classList.contains('is-visible')) {
+        els.videoFlipbookOverlay.hidden = true;
+      }
+    }, 120);
+  }, delay);
+}
 
 function updateVideoFrameStripActive(autoScroll = false) {
-  if (!els.videoFrameStrip) return;
+  if (!els.videoFrameStrip || state.isScrubbingStrip) return;
   const current = Number.isFinite(els.player.currentTime) ? els.player.currentTime : 0;
   let nearest = null;
   let nearestDelta = Infinity;
@@ -1594,31 +1689,56 @@ function showScrubHud(text, icon = '⏩') {
 
 function getStripThumbAtClientX(clientX) {
   if (!els.videoFrameStrip) return null;
-  const thumbs = Array.from(els.videoFrameStrip.querySelectorAll('.video-frame-thumb'));
-  if (thumbs.length === 0) return null;
+  const thumbs = els.videoFrameStrip.children;
+  const count = thumbs.length;
+  if (count === 0) return null;
 
-  for (const thumb of thumbs) {
-    const rect = thumb.getBoundingClientRect();
-    if (clientX >= rect.left && clientX <= rect.right) {
+  const stripRect = els.videoFrameStrip.getBoundingClientRect();
+  const centerY = stripRect.top + stripRect.height / 2;
+  if (clientX >= stripRect.left && clientX <= stripRect.right) {
+    const el = document.elementFromPoint(clientX, centerY);
+    const thumb = el ? el.closest('.video-frame-thumb') : null;
+    if (thumb && thumb.parentElement === els.videoFrameStrip) {
       return thumb;
     }
   }
 
+  let low = 0;
+  let high = count - 1;
   let nearest = thumbs[0];
   let minDist = Infinity;
-  for (const thumb of thumbs) {
+
+  while (low <= high) {
+    const mid = (low + high) >> 1;
+    const thumb = thumbs[mid];
     const rect = thumb.getBoundingClientRect();
     const midX = rect.left + rect.width / 2;
-    const dist = Math.abs(clientX - midX);
-    if (dist < minDist) {
-      minDist = dist;
+    const dist = clientX - midX;
+    if (Math.abs(dist) < minDist) {
+      minDist = Math.abs(dist);
       nearest = thumb;
+    }
+    if (clientX < rect.left) {
+      high = mid - 1;
+    } else if (clientX > rect.right) {
+      low = mid + 1;
+    } else {
+      return thumb;
     }
   }
   return nearest;
 }
 
-let stripDragStartX = 0;
+function getStripThumbAtViewportCenter() {
+  if (!els.videoFrameStrip) return null;
+  const stripRect = els.videoFrameStrip.getBoundingClientRect();
+  const centerX = stripRect.left + stripRect.width / 2;
+  return getStripThumbAtClientX(centerX);
+}
+
+let stripPointerStartX = 0;
+let stripPointerLastX = 0;
+let stripPanRafId = null;
 
 function setupFilmstripScrubbing() {
   if (!els.videoFrameStrip) return;
@@ -1627,46 +1747,51 @@ function setupFilmstripScrubbing() {
     if (e.button !== 0 && e.pointerType === 'mouse') return;
     state.isScrubbingStrip = true;
     state.hasDraggedStrip = false;
-    stripDragStartX = e.clientX;
+    stripPointerStartX = e.clientX;
+    stripPointerLastX = e.clientX;
     els.videoFrameStrip.classList.add('is-scrubbing');
     try {
       els.videoFrameStrip.setPointerCapture(e.pointerId);
     } catch (_) {}
 
-    const thumb = getStripThumbAtClientX(e.clientX);
+    const thumb = getStripThumbAtViewportCenter();
     if (thumb) {
+      setActiveStripThumb(thumb);
       const seconds = Number(thumb.dataset.seconds);
       if (Number.isFinite(seconds)) {
-        seekVideoToSeconds(seconds, false);
-        updateVideoControls();
+        showFlipbookPreview(thumb, seconds);
       }
     }
   };
 
   const handlePointerMove = (e) => {
     if (!state.isScrubbingStrip) return;
-    if (Math.abs(e.clientX - stripDragStartX) > 4) {
+    const deltaX = e.clientX - stripPointerLastX;
+    stripPointerLastX = e.clientX;
+
+    if (Math.abs(e.clientX - stripPointerStartX) > 4) {
       state.hasDraggedStrip = true;
     }
 
-    const stripRect = els.videoFrameStrip.getBoundingClientRect();
-    const edgeMargin = 45;
-    if (e.clientX < stripRect.left + edgeMargin) {
-      els.videoFrameStrip.scrollLeft -= 16;
-    } else if (e.clientX > stripRect.right - edgeMargin) {
-      els.videoFrameStrip.scrollLeft += 16;
-    }
+    // 1:1 Continuous hand pan (fluid pixel-by-pixel scrolling)
+    els.videoFrameStrip.scrollLeft -= deltaX;
 
-    if (state.stripRafId) return;
-    state.stripRafId = requestAnimationFrame(() => {
-      state.stripRafId = null;
+    if (stripPanRafId) return;
+    stripPanRafId = requestAnimationFrame(() => {
+      stripPanRafId = null;
       if (!state.isScrubbingStrip) return;
-      const thumb = getStripThumbAtClientX(e.clientX);
+
+      const thumb = getStripThumbAtViewportCenter();
       if (thumb) {
+        setActiveStripThumb(thumb);
         const seconds = Number(thumb.dataset.seconds);
         if (Number.isFinite(seconds)) {
-          seekVideoToSeconds(seconds, false);
-          updateVideoControls();
+          showFlipbookPreview(thumb, seconds);
+
+          if (flipbookDebounceTimer) clearTimeout(flipbookDebounceTimer);
+          flipbookDebounceTimer = setTimeout(() => {
+            seekVideoToSeconds(seconds, false);
+          }, 90);
         }
       }
     });
@@ -1680,15 +1805,31 @@ function setupFilmstripScrubbing() {
       els.videoFrameStrip.releasePointerCapture(e.pointerId);
     } catch (_) {}
 
-    if (state.stripRafId) {
-      cancelAnimationFrame(state.stripRafId);
-      state.stripRafId = null;
+    if (stripPanRafId) {
+      cancelAnimationFrame(stripPanRafId);
+      stripPanRafId = null;
     }
 
-    centerActiveFrameInStrip(true);
+    if (flipbookDebounceTimer) {
+      clearTimeout(flipbookDebounceTimer);
+      flipbookDebounceTimer = null;
+    }
+
+    const thumb = getStripThumbAtViewportCenter();
+    if (thumb) {
+      setActiveStripThumb(thumb);
+      const seconds = Number(thumb.dataset.seconds);
+      if (Number.isFinite(seconds)) {
+        seekVideoToSeconds(seconds, false);
+      }
+      centerActiveFrameInStrip(true);
+    }
+
+    hideFlipbookPreview(state.hasDraggedStrip ? 150 : 80);
+
     setTimeout(() => {
       state.hasDraggedStrip = false;
-    }, 50);
+    }, 60);
   };
 
   els.videoFrameStrip.addEventListener('pointerdown', handlePointerDown);
@@ -1704,10 +1845,7 @@ function handleVideoScrubWheel(e) {
   const duration = Number.isFinite(els.player.duration) ? els.player.duration : 0;
   if (duration <= 0 && (!els.videoFrameStrip || els.videoFrameStrip.children.length === 0)) return;
 
-  // Lướt lên (deltaY < 0): Tua tiến về phía trước
-  // Lướt xuống (deltaY > 0): Tua lùi về phía sau
   const isForward = e.deltaY < 0;
-
   const absDelta = Math.abs(e.deltaY);
   let step = 0.08;
   if (absDelta > 150) {
@@ -1727,11 +1865,18 @@ function handleVideoScrubWheel(e) {
 
   seekVideoToSeconds(target, false);
   updateVideoControls();
-  centerActiveFrameInStrip(false);
+
+  const thumb = findNearestThumbBySeconds(target);
+  if (thumb) {
+    setActiveStripThumb(thumb);
+    centerActiveFrameInStrip(false);
+    showFlipbookPreview(thumb, target);
+    hideFlipbookPreview(350);
+  }
 
   const icon = isForward ? '⏩' : '⏪';
   const sign = isForward ? '+' : '-';
-  const activeBtn = els.videoFrameStrip?.querySelector('.video-frame-thumb.is-active');
+  const activeBtn = thumb || els.videoFrameStrip?.querySelector('.video-frame-thumb.is-active');
   const frameInfo = activeBtn?.dataset.frameId ? ` · Frame ${activeBtn.dataset.frameId}` : '';
   showScrubHud(`${sign}${step.toFixed(2)}s (${formatVideoTime(target)})${frameInfo}`, icon);
 }
@@ -4215,12 +4360,37 @@ els.videoVolumeSlider.addEventListener('input', () => {
   els.player.muted = volume === 0;
   updateVideoControls();
 });
+let progressSeekDebounceTimer = null;
+
 els.videoProgress.addEventListener('input', () => {
   const duration = Number.isFinite(els.player.duration) ? els.player.duration : 0;
   if (duration <= 0) return;
-  els.player.currentTime = (Number(els.videoProgress.value) / 1000) * duration;
-  updateVideoControls();
-  centerActiveFrameInStrip(false);
+  const targetSeconds = (Number(els.videoProgress.value) / 1000) * duration;
+
+  const thumb = findNearestThumbBySeconds(targetSeconds);
+  if (thumb) {
+    setActiveStripThumb(thumb);
+    centerActiveFrameInStrip(false);
+    showFlipbookPreview(thumb, targetSeconds);
+  }
+
+  if (progressSeekDebounceTimer) clearTimeout(progressSeekDebounceTimer);
+  progressSeekDebounceTimer = setTimeout(() => {
+    seekVideoToSeconds(targetSeconds, false);
+  }, 80);
+});
+
+els.videoProgress.addEventListener('change', () => {
+  const duration = Number.isFinite(els.player.duration) ? els.player.duration : 0;
+  if (duration <= 0) return;
+  const targetSeconds = (Number(els.videoProgress.value) / 1000) * duration;
+  if (progressSeekDebounceTimer) {
+    clearTimeout(progressSeekDebounceTimer);
+    progressSeekDebounceTimer = null;
+  }
+  seekVideoToSeconds(targetSeconds, false);
+  centerActiveFrameInStrip(true);
+  hideFlipbookPreview(140);
 });
 els.videoSpeedBtn.addEventListener('click', () => {
   toggleVideoControlPopover(els.videoSpeedMenu, els.videoSpeedBtn);
