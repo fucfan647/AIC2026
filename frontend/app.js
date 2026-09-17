@@ -1420,6 +1420,33 @@ function centerActiveFrameInStrip(smooth = false) {
   });
 }
 
+let filmstripObserver = null;
+
+function setupFilmstripObserver() {
+  if (filmstripObserver) {
+    filmstripObserver.disconnect();
+    filmstripObserver = null;
+  }
+  if (!('IntersectionObserver' in window) || !els.videoFrameStrip) return;
+  filmstripObserver = new IntersectionObserver((entries, observer) => {
+    entries.forEach(entry => {
+      if (entry.isIntersecting) {
+        const img = entry.target;
+        const src = img.dataset.src;
+        if (src) {
+          img.src = src;
+          img.removeAttribute('data-src');
+        }
+        observer.unobserve(img);
+      }
+    });
+  }, {
+    root: els.videoFrameStrip,
+    rootMargin: '0px 350px 0px 350px',
+    threshold: 0.01
+  });
+}
+
 function renderVideoFrameItems(items, activeItem) {
   if (!els.videoFrameStrip) return;
   if (items.length === 0) {
@@ -1448,7 +1475,7 @@ function renderVideoFrameItems(items, activeItem) {
     btn.title = titleText;
     btn.innerHTML = `
       <span class="playhead-needle" aria-hidden="true"></span>
-      <img src="/thumbnail/${encodeURIComponent(item.keyframe_id)}" alt="${item.video_id} ${item.frame_id !== undefined ? 'frame ' + item.frame_id : 'shot ' + item.shot_id}" loading="lazy" />
+      <img data-src="/thumbnail/${encodeURIComponent(item.keyframe_id)}" alt="${item.video_id} ${item.frame_id !== undefined ? 'frame ' + item.frame_id : 'shot ' + item.shot_id}" />
       <span>${labelText}</span>`;
     btn.addEventListener('click', () => {
       if (state.hasDraggedStrip) return;
@@ -1477,6 +1504,18 @@ function renderVideoFrameItems(items, activeItem) {
     }
   }
   els.videoFrameStrip.style.visibility = '';
+
+  setupFilmstripObserver();
+  if (filmstripObserver) {
+    els.videoFrameStrip.querySelectorAll('img[data-src]').forEach(img => {
+      filmstripObserver.observe(img);
+    });
+  } else {
+    els.videoFrameStrip.querySelectorAll('img[data-src]').forEach(img => {
+      img.src = img.dataset.src;
+      img.removeAttribute('data-src');
+    });
+  }
 
   centerActiveFrameInStrip(false);
   window.requestAnimationFrame(() => centerActiveFrameInStrip(false));
