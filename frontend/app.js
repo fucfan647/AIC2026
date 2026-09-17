@@ -1377,7 +1377,8 @@ function uniqueVideoFrames(videoId, activeItem) {
 
 function centerActiveFrameInStrip(smooth = false) {
   if (!els.videoFrameStrip) return;
-  const target = els.videoFrameStrip.querySelector('.is-candidate-shot') || els.videoFrameStrip.querySelector('.is-active');
+  const target = els.videoFrameStrip.querySelector('.video-frame-thumb.is-active')
+    || els.videoFrameStrip.querySelector('.is-candidate-shot');
   if (!target) return;
   const strip = els.videoFrameStrip;
   const stripWidth = strip.clientWidth;
@@ -1418,6 +1419,7 @@ function renderVideoFrameItems(items, activeItem) {
       : formatVideoTime(seconds);
     btn.title = titleText;
     btn.innerHTML = `
+      <span class="playhead-needle" aria-hidden="true"></span>
       <img src="/thumbnail/${encodeURIComponent(item.keyframe_id)}" alt="${item.video_id} ${item.frame_id !== undefined ? 'frame ' + item.frame_id : 'shot ' + item.shot_id}" loading="lazy" />
       <span>${labelText}</span>`;
     btn.addEventListener('click', () => {
@@ -1695,7 +1697,7 @@ function handleVideoScrubWheel(e) {
 
   seekVideoToSeconds(target, false);
   updateVideoControls();
-  centerActiveFrameInStrip(true);
+  centerActiveFrameInStrip(false);
 
   const icon = isForward ? '⏩' : '⏪';
   const sign = isForward ? '+' : '-';
@@ -4182,6 +4184,8 @@ els.videoProgress.addEventListener('input', () => {
   const duration = Number.isFinite(els.player.duration) ? els.player.duration : 0;
   if (duration <= 0) return;
   els.player.currentTime = (Number(els.videoProgress.value) / 1000) * duration;
+  updateVideoControls();
+  centerActiveFrameInStrip(false);
 });
 els.videoSpeedBtn.addEventListener('click', () => {
   toggleVideoControlPopover(els.videoSpeedMenu, els.videoSpeedBtn);

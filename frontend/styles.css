@@ -2767,27 +2767,49 @@ input[type="range"] {
   z-index: 2;
 }
 
-/* Playhead active frame styling with top needle pointer */
+/* Playhead active frame styling with red playhead line & needle */
 .video-frame-thumb.is-active {
-  z-index: 5;
-  outline: 2px solid var(--accent, #e54d5e);
-  outline-offset: -2px;
-  filter: brightness(1.1);
+  z-index: 6;
+  outline: 2.5px solid #ff2035;
+  outline-offset: -2.5px;
+  filter: brightness(1.15);
+  box-shadow: 0 0 12px rgba(255, 32, 53, 0.45);
 }
 
+/* Red vertical playhead line running through center of active frame */
 .video-frame-thumb.is-active::before {
   content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 3px;
+  transform: translateX(-50%);
+  background: #ff2035;
+  box-shadow: 0 0 8px rgba(255, 32, 53, 0.95), 0 0 2px #ffffff;
+  z-index: 12;
+  pointer-events: none;
+}
+
+/* Top playhead needle indicator */
+.playhead-needle {
+  display: none;
   position: absolute;
   top: 0;
   left: 50%;
   transform: translateX(-50%);
   width: 0;
   height: 0;
-  border-left: 6px solid transparent;
-  border-right: 6px solid transparent;
-  border-top: 7px solid var(--accent, #e54d5e);
-  z-index: 10;
+  border-left: 7px solid transparent;
+  border-right: 7px solid transparent;
+  border-top: 8px solid #ff2035;
+  z-index: 14;
   pointer-events: none;
+  filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.7));
+}
+
+.video-frame-thumb.is-active .playhead-needle {
+  display: block;
 }
 
 .video-icon-btn:hover,
