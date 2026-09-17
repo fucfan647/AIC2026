@@ -46,7 +46,8 @@ const state = {
   videoFps: {default_fps: 25, overrides: {}},
   isScrubbingStrip: false,
   hasDraggedStrip: false,
-  stripRafId: null
+  stripRafId: null,
+  isInitialVideoLoad: false
 };
 
 const DRES_CACHE_KEY = 'aic_dres_session_v1';
@@ -1319,6 +1320,15 @@ function updateVideoControls() {
   els.videoVolumeValue.textContent = `${Math.round(effectiveVolume * 100)}%`;
   els.videoTime.textContent = `${formatVideoTime(current)} / ${formatVideoTime(duration)}`;
   els.videoProgress.value = duration > 0 ? String(Math.round((current / duration) * 1000)) : '0';
+
+  // Do not allow premature 0.0s timeupdate during initial load to yank filmstrip back to frame 0
+  if (state.isInitialVideoLoad) {
+    const targetSeconds = (state.activeVideoItem ? answerTimeMs(state.activeVideoItem) / 1000.0 : 0) || 0;
+    if (targetSeconds > 0.5 && current < 0.1) {
+      return;
+    }
+  }
+
   updateVideoFrameStripActive(true);
 }
 
@@ -1398,8 +1408,12 @@ function centerActiveFrameInStrip(smooth = false) {
 
 function renderVideoFrameItems(items, activeItem) {
   if (!els.videoFrameStrip) return;
-  els.videoFrameStrip.innerHTML = '';
-  if (items.length === 0) return;
+  if (items.length === 0) {
+    els.videoFrameStrip.innerHTML = '';
+    return;
+  }
+
+  const frag = document.createDocumentFragment();
   items.forEach(item => {
     const seconds = Number.isFinite(item.timestamp_seconds) ? item.timestamp_seconds : (answerTimeMs(item) / 1000);
     const isCurrentFrame = Boolean(item.is_current)
@@ -1427,15 +1441,32 @@ function renderVideoFrameItems(items, activeItem) {
       seekVideoToSeconds(seconds, true);
       centerActiveFrameInStrip(true);
     });
-    els.videoFrameStrip.appendChild(btn);
+    frag.appendChild(btn);
   });
 
-  // Mathematically center the candidate frame (frame gốc) immediately upon rendering
+  // Temporarily hide visually to pre-position scrollLeft without showing frame 0
+  els.videoFrameStrip.style.visibility = 'hidden';
+  els.videoFrameStrip.innerHTML = '';
+  els.videoFrameStrip.appendChild(frag);
+
+  // Synchronously compute and align scroll position immediately
+  const target = els.videoFrameStrip.querySelector('.video-frame-thumb.is-candidate-shot')
+    || els.videoFrameStrip.querySelector('.video-frame-thumb.is-active');
+  if (target) {
+    const stripWidth = els.videoFrameStrip.clientWidth;
+    if (stripWidth > 0) {
+      const targetRect = target.getBoundingClientRect();
+      const stripRect = els.videoFrameStrip.getBoundingClientRect();
+      const relativeLeft = targetRect.left - stripRect.left + els.videoFrameStrip.scrollLeft;
+      const targetScrollLeft = relativeLeft - (stripWidth / 2) + (target.offsetWidth / 2);
+      els.videoFrameStrip.scrollLeft = Math.max(0, targetScrollLeft);
+    }
+  }
+  els.videoFrameStrip.style.visibility = '';
+
   centerActiveFrameInStrip(false);
   window.requestAnimationFrame(() => centerActiveFrameInStrip(false));
-  window.setTimeout(() => centerActiveFrameInStrip(false), 50);
-  window.setTimeout(() => centerActiveFrameInStrip(false), 150);
-  window.setTimeout(() => centerActiveFrameInStrip(false), 300);
+  window.setTimeout(() => centerActiveFrameInStrip(false), 40);
   updateVideoFrameStripActive();
 }
 
@@ -1773,6 +1804,7 @@ function openResult(item) {
   const startSeconds = answerTimeMs(item) / 1000.0;
   let hasPlayed = false;
   state.activeVideoItem = item;
+  state.isInitialVideoLoad = true;
   els.modalTitle.textContent = `Video ${item.video_id} - cảnh ${item.shot_id}`;
   els.videoModal.hidden = false;
   renderActiveQuery();
@@ -1784,10 +1816,10 @@ function openResult(item) {
   renderTaskControls();
   renderVideoFrameStrip(item);
   renderTrakeTray();
-  window.setTimeout(() => centerActiveFrameInStrip(false), 100);
   refreshIcons(els.videoModal);
   updateVideoControls();
   const playVideo = () => {
+    state.isInitialVideoLoad = false;
     if (hasPlayed) return;
     hasPlayed = true;
     els.player.play().catch(() => {});
@@ -1804,12 +1836,16 @@ function openResult(item) {
   });
   els.player.addEventListener('seeked', function playOnce() {
     els.player.removeEventListener('seeked', playOnce);
+    state.isInitialVideoLoad = false;
+    updateVideoControls();
+    centerActiveFrameInStrip(false);
     playVideo();
   });
   loadVideoSource(item.video_id, startSeconds);
 }
 
 function closeVideo() {
+  state.isInitialVideoLoad = false;
   els.player.pause();
   closeVideoControlPopovers();
   destroyActiveHls();
