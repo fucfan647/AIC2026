@@ -847,10 +847,77 @@ def create_app(
     async def temporal_search(request: Request):
         return await proxy_backend(request, "/temporal-search")
 
+    def get_frames_for_video(video_id: str) -> List[Dict[str, Any]]:
+        if video_id in frames_by_video and frames_by_video[video_id]:
+            return frames_by_video[video_id]
+        
+        actual_records = records_path
+        if not actual_records.exists():
+            sqlite_candidate = records_path.with_name("records.sqlite")
+            local_cand = FRONTEND_DIR / "records.sqlite"
+            if sqlite_candidate.exists():
+                actual_records = sqlite_candidate
+            elif local_cand.exists():
+                actual_records = local_cand
+
+        if actual_records.exists() and actual_records.suffix.lower() in {".sqlite", ".db"}:
+            try:
+                import sqlite3
+                conn = sqlite3.connect(f"file:{actual_records.resolve()}?mode=ro", uri=True)
+                conn.row_factory = sqlite3.Row
+                cursor = conn.execute(
+                    "SELECT row_id, keyframe_id, video_id, shot_id, frame_idx, timestamp_ms, image_file, shot_start_ms, shot_end_ms "
+                    "FROM records WHERE video_id = ? ORDER BY timestamp_ms ASC",
+                    (video_id,)
+                )
+                frames = []
+                for row in cursor:
+                    keyframe_id = str(row["keyframe_id"]).strip()
+                    source_row = int(row["row_id"]) if row["row_id"] is not None else -1
+                    if source_row in deleted_rows or keyframe_id in deleted_keyframe_ids:
+                        continue
+                    ts_ms = int(row["timestamp_ms"] or 0)
+                    frames.append({
+                        "keyframe_id": keyframe_id,
+                        "video_id": video_id,
+                        "shot_id": int(row["shot_id"] or 0) if row["shot_id"] is not None else 0,
+                        "timestamp_ms": ts_ms,
+                        "timestamp_seconds": round(ts_ms / 1000.0, 3),
+                        "frame_id": int(row["frame_idx"] or 0) if row["frame_idx"] is not None else 0,
+                        "source_embedding_row": source_row,
+                    })
+                conn.close()
+                if frames:
+                    frames_by_video[video_id] = frames
+                    return frames
+            except Exception as e:
+                print(f"[frontend] direct sqlite query error for {video_id}: {e}", flush=True)
+
+        return frames_by_video.get(video_id, [])
+
+    def get_shot_frames_for_video(video_id: str) -> List[Dict[str, Any]]:
+        if video_id in shot_frames_by_video and shot_frames_by_video[video_id]:
+            return shot_frames_by_video[video_id]
+        
+        frames = get_frames_for_video(video_id)
+        if not frames:
+            return shot_frames_by_video.get(video_id, [])
+        
+        shots: Dict[int, Tuple[float, Dict[str, Any]]] = {}
+        for frame in frames:
+            shot_id = frame.get("shot_id", 0)
+            if shot_id not in shots:
+                shots[shot_id] = (0, frame)
+        
+        rep_list = [item[1] for _, item in sorted(shots.items(), key=lambda x: x[0])]
+        shot_frames_by_video[video_id] = rep_list
+        return rep_list
+
     @app.get("/shot-context/{video_id}/{shot_id}")
     async def shot_context(
         video_id: str,
         shot_id: int,
+        request: Request,
         keyframe_id: str = "",
         timestamp_ms: Optional[int] = None,
     ):
@@ -858,10 +925,25 @@ def create_app(
             raise HTTPException(status_code=400, detail="Invalid video id")
         if keyframe_id in deleted_keyframe_ids:
             raise HTTPException(status_code=404, detail="Frame da duoc chuyen sang frames_deleted")
-        if not metadata_ready.is_set():
-            raise HTTPException(status_code=503, detail="Shot metadata is loading")
+        
+        shot_list = get_shot_frames_for_video(video_id)
+        if not shot_list:
+            if team_hub_url:
+                try:
+                    return await proxy_team_hub(request, f"/shot-context/{urllib.parse.quote(video_id)}/{shot_id}")
+                except Exception:
+                    pass
+            if backend_url:
+                try:
+                    return await proxy_backend(request, f"/shot-context/{urllib.parse.quote(video_id)}/{shot_id}")
+                except Exception:
+                    pass
+            if not metadata_ready.is_set():
+                raise HTTPException(status_code=503, detail="Shot metadata is loading")
+            raise HTTPException(status_code=404, detail="Shot metadata not found")
+
         frames = select_shot_context(
-            shot_frames_by_video.get(video_id, []),
+            shot_list,
             shot_id,
             keyframe_id=keyframe_id,
             timestamp_ms=timestamp_ms,
@@ -871,10 +953,24 @@ def create_app(
         return {"frames": frames, "returned": len(frames), "window_size": 24}
 
     @app.get("/frame-context/{video_id}")
-    async def frame_context(video_id: str, timestamp_ms: int = 0, count: int = 0):
-        if not metadata_ready.is_set():
-            raise HTTPException(status_code=503, detail="Frame metadata is loading")
-        frames = select_frame_context(frames_by_video.get(video_id, []), timestamp_ms, count=count)
+    async def frame_context(video_id: str, request: Request, timestamp_ms: int = 0, count: int = 0):
+        video_frames = get_frames_for_video(video_id)
+        if not video_frames:
+            if team_hub_url:
+                try:
+                    return await proxy_team_hub(request, f"/frame-context/{urllib.parse.quote(video_id)}")
+                except Exception:
+                    pass
+            if backend_url:
+                try:
+                    return await proxy_backend(request, f"/frame-context/{urllib.parse.quote(video_id)}")
+                except Exception:
+                    pass
+            if not metadata_ready.is_set():
+                raise HTTPException(status_code=503, detail="Frame metadata is loading")
+            raise HTTPException(status_code=404, detail="Synthetic frame metadata not found")
+
+        frames = select_frame_context(video_frames, timestamp_ms, count=count)
         if not frames:
             raise HTTPException(status_code=404, detail="Synthetic frame metadata not found")
         return {"frames": frames, "returned": len(frames), "window_size": count or len(frames)}

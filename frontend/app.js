@@ -1360,7 +1360,21 @@ function toggleVideoControlPopover(popover, button) {
 
 function seekVideoToSeconds(seconds, shouldPlay = false) {
   const duration = Number.isFinite(els.player.duration) ? els.player.duration : 0;
-  const target = Math.max(0, duration > 0 ? Math.min(seconds, duration - 0.1) : seconds);
+  let target = seconds;
+
+  if (duration > 0 && els.videoFrameStrip) {
+    const thumbs = els.videoFrameStrip.querySelectorAll('.video-frame-thumb');
+    if (thumbs.length > 1) {
+      const firstSec = Number(thumbs[0].dataset.seconds) || 0;
+      const lastSec = Number(thumbs[thumbs.length - 1].dataset.seconds) || 0;
+      if (lastSec > firstSec && (seconds >= lastSec || seconds <= firstSec || lastSec > duration)) {
+        const progress = Math.min(1, Math.max(0, (seconds - firstSec) / (lastSec - firstSec)));
+        target = progress * (duration - 0.05);
+      }
+    }
+  }
+
+  target = Math.max(0, duration > 0 ? Math.min(target, duration - 0.05) : target);
   els.player.currentTime = target;
   if (shouldPlay) els.player.play().catch(() => {});
   updateVideoControls();
@@ -1551,26 +1565,61 @@ let lastAutoScrollTime = 0;
 
 function updateVideoFrameStripActive(autoScroll = false) {
   if (!els.videoFrameStrip) return;
+  const thumbs = Array.from(els.videoFrameStrip.querySelectorAll('.video-frame-thumb'));
+  if (thumbs.length === 0) return;
+
   const current = Number.isFinite(els.player.currentTime) ? els.player.currentTime : 0;
+  const duration = Number.isFinite(els.player.duration) ? els.player.duration : 0;
+  const isEnded = els.player.ended || (duration > 0 && current >= duration - 0.25);
+
   let nearest = null;
-  let nearestDelta = Infinity;
-  els.videoFrameStrip.querySelectorAll('.video-frame-thumb').forEach(btn => {
-    const seconds = Number(btn.dataset.seconds);
-    const delta = Math.abs(seconds - current);
-    if (delta < nearestDelta) {
-      nearest = btn;
-      nearestDelta = delta;
+  if (isEnded) {
+    nearest = thumbs[thumbs.length - 1];
+  } else if (current <= 0.05) {
+    nearest = thumbs[0];
+  } else if (duration > 0 && thumbs.length > 1) {
+    const firstSec = Number(thumbs[0].dataset.seconds) || 0;
+    const lastSec = Number(thumbs[thumbs.length - 1].dataset.seconds) || 0;
+    if (lastSec > firstSec) {
+      const progress = Math.min(1, Math.max(0, current / duration));
+      const mappedTime = firstSec + progress * (lastSec - firstSec);
+      let nearestDelta = Infinity;
+      thumbs.forEach(btn => {
+        const seconds = Number(btn.dataset.seconds);
+        const delta = Math.abs(seconds - mappedTime);
+        if (delta < nearestDelta) {
+          nearest = btn;
+          nearestDelta = delta;
+        }
+      });
     }
-    btn.classList.remove('is-active');
-  });
-  if (nearest) {
-    nearest.classList.add('is-active');
-    if (autoScroll && !state.isScrubbingStrip && !els.player.paused) {
-      const now = performance.now();
-      if (now - lastAutoScrollTime > 380) {
-        lastAutoScrollTime = now;
-        centerActiveFrameInStrip(true);
+  }
+
+  if (!nearest) {
+    let nearestDelta = Infinity;
+    thumbs.forEach(btn => {
+      const seconds = Number(btn.dataset.seconds);
+      const delta = Math.abs(seconds - current);
+      if (delta < nearestDelta) {
+        nearest = btn;
+        nearestDelta = delta;
       }
+    });
+  }
+
+  thumbs.forEach(btn => {
+    if (btn === nearest) {
+      btn.classList.add('is-active');
+    } else {
+      btn.classList.remove('is-active');
+    }
+  });
+
+  if (nearest && autoScroll && !state.isScrubbingStrip && !els.player.paused) {
+    const now = performance.now();
+    if (now - lastAutoScrollTime > 380) {
+      lastAutoScrollTime = now;
+      centerActiveFrameInStrip(true);
     }
   }
 }
@@ -1707,19 +1756,40 @@ function handleVideoScrubWheel(e) {
   // Lướt lên (deltaY < 0): Tua tiến về phía trước
   // Lướt xuống (deltaY > 0): Tua lùi về phía sau
   const isForward = e.deltaY < 0;
-
   const absDelta = Math.abs(e.deltaY);
-  let step = 0.08;
-  if (absDelta > 150) {
-    step = 1.0;
-  } else if (absDelta > 60) {
-    step = 0.4;
-  } else if (absDelta > 25) {
-    step = 0.15;
-  } else {
-    step = 0.05;
+
+  const thumbs = els.videoFrameStrip ? Array.from(els.videoFrameStrip.querySelectorAll('.video-frame-thumb')) : [];
+  if (thumbs.length > 0) {
+    const activeIdx = thumbs.findIndex(btn => btn.classList.contains('is-active'));
+    const currentIdx = activeIdx >= 0 ? activeIdx : 0;
+    let stepCount = 1;
+    if (absDelta > 150) stepCount = 12;
+    else if (absDelta > 60) stepCount = 5;
+    else if (absDelta > 25) stepCount = 2;
+    if (e.shiftKey) stepCount *= 3;
+
+    const nextIdx = Math.max(0, Math.min(thumbs.length - 1, currentIdx + (isForward ? stepCount : -stepCount)));
+    const nextThumb = thumbs[nextIdx];
+    if (nextThumb) {
+      const seconds = Number(nextThumb.dataset.seconds);
+      if (Number.isFinite(seconds)) {
+        seekVideoToSeconds(seconds, false);
+        updateVideoControls();
+        centerActiveFrameInStrip(false);
+        const icon = isForward ? '⏩' : '⏪';
+        const sign = isForward ? '+' : '-';
+        const frameInfo = nextThumb.dataset.frameId ? ` · Frame ${nextThumb.dataset.frameId}` : '';
+        showScrubHud(`${sign}${stepCount}f (${formatVideoTime(seconds)})${frameInfo}`, icon);
+        return;
+      }
+    }
   }
 
+  let step = 0.08;
+  if (absDelta > 150) step = 1.0;
+  else if (absDelta > 60) step = 0.4;
+  else if (absDelta > 25) step = 0.15;
+  else step = 0.05;
   if (e.shiftKey) step *= 4;
 
   const current = Number.isFinite(els.player.currentTime) ? els.player.currentTime : 0;
