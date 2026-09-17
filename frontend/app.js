@@ -1473,13 +1473,13 @@ function renderVideoFrameStrip(activeItem) {
     });
   }
 
-  // Load 48 nearby frames into the bottom strip by default!
-  const frameCacheKey = `${activeItem.video_id}:frames:${timestampMs}`;
+  // Load all frames of the video into the bottom filmstrip!
+  const frameCacheKey = `${activeItem.video_id}:all_frames`;
   let frameReq = state.shotContextCache.get(frameCacheKey);
   if (!frameReq) {
     const params = new URLSearchParams({
       timestamp_ms: String(timestampMs),
-      count: '49'
+      count: '0'
     });
     const url = `/frame-context/${encodeURIComponent(activeItem.video_id)}?${params}`;
     frameReq = fetch(url).then(async response => {
@@ -1496,13 +1496,12 @@ function renderVideoFrameStrip(activeItem) {
 
   frameReq.then(payload => {
     const isStillActive = state.activeVideoItem
-      && state.activeVideoItem.video_id === activeItem.video_id
-      && state.activeVideoItem.keyframe_id === activeItem.keyframe_id;
+      && state.activeVideoItem.video_id === activeItem.video_id;
     if (!isStillActive || !Array.isArray(payload.frames) || payload.frames.length === 0) return;
     state.activeFrameContextFrames = payload.frames;
     renderVideoFrameItems(payload.frames, activeItem);
 
-    // Ensure frame gốc is centered in view
+    // Ensure active/candidate frame is centered in view
     centerActiveFrameInStrip(false);
     window.requestAnimationFrame(() => centerActiveFrameInStrip(false));
     window.setTimeout(() => centerActiveFrameInStrip(false), 80);
