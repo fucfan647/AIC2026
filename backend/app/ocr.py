@@ -179,6 +179,29 @@ class OcrTextIndex:
             for rank, row in enumerate(rows, start=1)
         ]
 
+    def get_frame_ocr(self, row_id: int | None = None, keyframe_id: str | None = None) -> dict[str, Any] | None:
+        if row_id is None and not keyframe_id:
+            return None
+        with self._lock:
+            if row_id is not None:
+                row = self.conn.execute(
+                    "SELECT ocr_text, avg_confidence, max_confidence, line_count FROM ocr_frames WHERE row_id = ?",
+                    (int(row_id),),
+                ).fetchone()
+            else:
+                row = self.conn.execute(
+                    "SELECT ocr_text, avg_confidence, max_confidence, line_count FROM ocr_frames WHERE keyframe_id = ?",
+                    (str(keyframe_id),),
+                ).fetchone()
+        if row is None:
+            return None
+        return {
+            "ocr_text": str(row["ocr_text"] or ""),
+            "avg_confidence": float(row["avg_confidence"] or 0.0),
+            "max_confidence": float(row["max_confidence"] or 0.0),
+            "line_count": int(row["line_count"] or 0),
+        }
+
 
 def fuse_ranked_results(
     visual_results: list[dict[str, Any]],

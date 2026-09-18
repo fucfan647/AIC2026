@@ -24,7 +24,7 @@ else
 fi
 
 # 2. Configure GPU Device (Default GPU 0, override via GPU_ID or CUDA_VISIBLE_DEVICES)
-GPU_ID="${GPU_ID:-0}"
+GPU_ID="${GPU_ID:-2}"
 export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-$GPU_ID}"
 
 # 3. Configure Network Host & Port

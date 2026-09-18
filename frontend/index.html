@@ -169,6 +169,7 @@
               </div>
             </div>
             <div id="videoFrameStrip" class="video-frame-strip" aria-label="Frame lân cận"></div>
+            <div id="videoTextHud" class="video-text-hud" hidden></div>
           </div>
         </div>
         <aside id="videoTrakeTray" class="video-trake-tray" aria-label="Khay TRAKE">
@@ -221,7 +222,10 @@
       </div>
       <footer class="image-details">
         <div id="imageMeta" class="image-meta"></div>
-        <button id="imageAddTrayBtn" class="primary image-add-tray" type="button" title="Thêm keyframe này vào khay"><i data-lucide="circle-plus"></i>Thêm vào khay</button>
+        <div id="imageTextDetails" class="image-text-details"></div>
+        <div class="image-actions-row">
+          <button id="imageAddTrayBtn" class="primary image-add-tray" type="button" title="Thêm keyframe này vào khay"><i data-lucide="circle-plus"></i>Thêm vào khay</button>
+        </div>
       </footer>
     </section>
   </div>

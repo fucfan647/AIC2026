@@ -75,6 +75,7 @@ TIMED_PATH_PREFIXES = (
     "/search",
     "/temporal-search",
     "/translate-query",
+    "/frame-text/",
     "/thumbnail/",
     "/keyframe/",
     "/keyframe-webp/",
@@ -842,6 +843,10 @@ def create_app(
             method="POST",
         )
         return await forward_urllib_request(req, timeout=300)
+
+    @app.get("/frame-text/{keyframe_id:path}")
+    async def frame_text(keyframe_id: str, request: Request):
+        return await proxy_backend(request, f"/frame-text/{urllib.parse.quote(keyframe_id)}")
 
     @app.post("/temporal-search")
     async def temporal_search(request: Request):

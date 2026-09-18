@@ -142,6 +142,7 @@ const els = {
   expandShotContextBtn: document.getElementById('expandShotContextBtn'),
   expandFrameContextBtn: document.getElementById('expandFrameContextBtn'),
   videoFrameStrip: document.getElementById('videoFrameStrip'),
+  videoTextHud: document.getElementById('videoTextHud'),
   videoModal: document.getElementById('videoModal'),
   modalTitle: document.getElementById('modalTitle'),
   closeVideoBtn: document.getElementById('closeVideoBtn'),
@@ -157,6 +158,7 @@ const els = {
   imageTitle: document.getElementById('imageTitle'),
   imagePreview: document.getElementById('imagePreview'),
   imageMeta: document.getElementById('imageMeta'),
+  imageTextDetails: document.getElementById('imageTextDetails'),
   imageAddTrayBtn: document.getElementById('imageAddTrayBtn'),
   closeImageBtn: document.getElementById('closeImageBtn'),
   errorBanner: document.getElementById('errorBanner'),
@@ -1423,6 +1425,7 @@ function renderVideoFrameItems(items, activeItem) {
     btn.className = `video-frame-thumb${isCurrentFrame ? ' is-candidate-shot is-active' : ''}`;
     btn.type = 'button';
     btn.dataset.seconds = String(seconds);
+    btn.dataset.keyframeId = String(item.keyframe_id || '');
     if (item.shot_id !== undefined) btn.dataset.shotId = String(item.shot_id ?? '');
     if (item.frame_id !== undefined) btn.dataset.frameId = String(item.frame_id ?? '');
     const titleText = item.frame_id !== undefined
@@ -1565,6 +1568,9 @@ function updateVideoFrameStripActive(autoScroll = false) {
   });
   if (nearest) {
     nearest.classList.add('is-active');
+    if (nearest.dataset.keyframeId) {
+      updateVideoTextHud(nearest.dataset.keyframeId);
+    }
     if (autoScroll && !state.isScrubbingStrip && !els.player.paused) {
       const now = performance.now();
       if (now - lastAutoScrollTime > 380) {
@@ -1853,6 +1859,11 @@ function closeVideo() {
   els.player.removeAttribute('poster');
   els.player.load();
   if (els.videoFrameStrip) els.videoFrameStrip.innerHTML = '';
+  if (els.videoTextHud) {
+    els.videoTextHud.hidden = true;
+    els.videoTextHud.innerHTML = '';
+  }
+  currentVideoHudKeyframe = '';
   closeShotOverview();
   closeFrameOverview();
   state.activeShotContextFrames = [];
@@ -2238,15 +2249,125 @@ function keyframeInfoHtml(item, options = {}) {
   return details.join('');
 }
 
+const frameTextCache = new Map();
+
+async function fetchFrameText(keyframeId) {
+  if (!keyframeId) return null;
+  const cached = frameTextCache.get(keyframeId);
+  if (cached) return cached;
+  try {
+    const res = await fetch(`/frame-text/${encodeURIComponent(keyframeId)}`);
+    if (!res.ok) return null;
+    const data = await res.json();
+    frameTextCache.set(keyframeId, data);
+    return data;
+  } catch (err) {
+    console.warn('Không lấy được frame-text:', err);
+    return null;
+  }
+}
+
+function renderFrameTextDetails(container, data, item, isLoading = false) {
+  if (!container) return;
+  const ocrText = (data?.ocr_text ?? item?.ocr_text ?? '').trim();
+  const asrText = (data?.asr_text ?? item?.asr_text ?? '').trim();
+  const asrStart = data?.asr_start_ms ?? item?.asr_start_ms;
+  const asrEnd = data?.asr_end_ms ?? item?.asr_end_ms;
+  const hasAsrTime = asrStart !== null && asrStart !== undefined && asrEnd !== null && asrEnd !== undefined;
+  const asrTimeStr = hasAsrTime ? `[${formatVideoTime(Number(asrStart) / 1000)} – ${formatVideoTime(Number(asrEnd) / 1000)}]` : '';
+
+  const ocrEmptyText = isLoading ? 'Đang tải OCR...' : 'Không phát hiện văn bản trong frame này';
+  const asrEmptyText = isLoading ? 'Đang tải ASR...' : 'Không có lời thoại tại đoạn này';
+
+  const ocrHtml = `
+    <div class="frame-text-card ocr-card">
+      <div class="frame-text-card-head">
+        <span class="frame-text-badge ocr-badge"><i data-lucide="scan-text"></i> OCR Text</span>
+        ${ocrText ? `<button class="text-copy-btn" type="button" data-copy-text="${escapeHtml(ocrText)}"><i data-lucide="copy"></i> Copy</button>` : ''}
+      </div>
+      <div class="frame-text-content ${ocrText ? '' : 'frame-text-empty'}">
+        ${ocrText ? escapeHtml(ocrText) : ocrEmptyText}
+      </div>
+    </div>
+  `;
+
+  const asrHtml = `
+    <div class="frame-text-card asr-card">
+      <div class="frame-text-card-head">
+        <span class="frame-text-badge asr-badge"><i data-lucide="mic"></i> ASR Lời Thoại</span>
+        ${asrTimeStr ? `<span class="frame-text-time">${escapeHtml(asrTimeStr)}</span>` : ''}
+        ${asrText ? `<button class="text-copy-btn" type="button" data-copy-text="${escapeHtml(asrText)}"><i data-lucide="copy"></i> Copy</button>` : ''}
+      </div>
+      <div class="frame-text-content ${asrText ? '' : 'frame-text-empty'}">
+        ${asrText ? escapeHtml(asrText) : asrEmptyText}
+      </div>
+    </div>
+  `;
+
+  container.innerHTML = ocrHtml + asrHtml;
+  container.querySelectorAll('.text-copy-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const text = btn.getAttribute('data-copy-text');
+      if (text) {
+        navigator.clipboard.writeText(text).then(() => {
+          const originalHtml = btn.innerHTML;
+          btn.classList.add('copied');
+          btn.innerHTML = '<i data-lucide="check"></i> Đã chép!';
+          refreshIcons(btn);
+          setTimeout(() => {
+            btn.classList.remove('copied');
+            btn.innerHTML = originalHtml;
+            refreshIcons(btn);
+          }, 1500);
+        }).catch(() => {});
+      }
+    });
+  });
+  refreshIcons(container);
+}
+
+let currentVideoHudKeyframe = '';
+async function updateVideoTextHud(keyframeId) {
+  if (!els.videoTextHud || !keyframeId) return;
+  if (currentVideoHudKeyframe === keyframeId) return;
+  currentVideoHudKeyframe = keyframeId;
+  const data = await fetchFrameText(keyframeId);
+  if (currentVideoHudKeyframe !== keyframeId) return;
+  const ocr = (data?.ocr_text || '').trim();
+  const asr = (data?.asr_text || '').trim();
+  if (!ocr && !asr) {
+    els.videoTextHud.hidden = true;
+    els.videoTextHud.innerHTML = '';
+    return;
+  }
+  let html = '';
+  if (ocr) {
+    html += `<div class="video-text-hud-item"><span class="video-text-hud-tag ocr">OCR</span><span class="video-text-hud-text" title="${escapeHtml(ocr)}">${escapeHtml(ocr)}</span></div>`;
+  }
+  if (asr) {
+    html += `<div class="video-text-hud-item"><span class="video-text-hud-tag asr">ASR</span><span class="video-text-hud-text" title="${escapeHtml(asr)}">${escapeHtml(asr)}</span></div>`;
+  }
+  els.videoTextHud.innerHTML = html;
+  els.videoTextHud.hidden = false;
+}
+
 function openFrameImage(item) {
   state.imageItem = item;
   els.imageTitle.textContent = `Frame ${item.video_id} - cảnh ${item.shot_id}`;
   els.imagePreview.src = item.image_url || `/keyframe/${item.keyframe_id}`;
   els.imagePreview.alt = `${item.video_id} cảnh ${item.shot_id}`;
-  els.imageMeta.innerHTML = keyframeInfoHtml(item)
-    + (item.ocr_text ? `<span class="keyframe-info-wide"><strong>OCR</strong> ${escapeHtml(item.ocr_text)}</span>` : '')
-    + (item.asr_text ? `<span class="keyframe-info-wide"><strong>ASR</strong> ${escapeHtml(item.asr_text)} (${formatVideoTime(Number(item.asr_start_ms || 0) / 1000)}–${formatVideoTime(Number(item.asr_end_ms || 0) / 1000)})</span>` : '');
+  els.imageMeta.innerHTML = keyframeInfoHtml(item);
   setImageAddTrayState(isKeyframeInTray(item));
+  if (els.imageTextDetails) {
+    const hasExistingText = item.ocr_text || item.asr_text;
+    renderFrameTextDetails(els.imageTextDetails, null, item, !hasExistingText);
+    fetchFrameText(item.keyframe_id).then(data => {
+      if (state.imageItem?.keyframe_id === item.keyframe_id) {
+        renderFrameTextDetails(els.imageTextDetails, data, item, false);
+      }
+    });
+  }
   els.imageModal.hidden = false;
 }
 
@@ -2254,6 +2375,7 @@ function closeFrameImage() {
   els.imagePreview.removeAttribute('src');
   els.imagePreview.removeAttribute('alt');
   els.imageMeta.innerHTML = '';
+  if (els.imageTextDetails) els.imageTextDetails.innerHTML = '';
   state.imageItem = null;
   els.imageModal.hidden = true;
 }

@@ -153,6 +153,67 @@ class AsrTextIndex:
             for rank, row in enumerate(rows, start=1)
         ]
 
+    def get_frame_asr(
+        self,
+        video_id: str,
+        timestamp_ms: int,
+        keyframe_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        vid = str(video_id).strip().upper()
+        t_ms = int(timestamp_ms)
+        with self._lock:
+            if keyframe_id:
+                row = self.conn.execute(
+                    "SELECT text_raw, start_ms, end_ms FROM asr_segments WHERE keyframe_id = ? LIMIT 1",
+                    (str(keyframe_id),),
+                ).fetchone()
+                if row and row["text_raw"]:
+                    return {
+                        "asr_text": str(row["text_raw"]),
+                        "start_ms": int(row["start_ms"]),
+                        "end_ms": int(row["end_ms"]),
+                    }
+
+            row = self.conn.execute(
+                """
+                SELECT text_raw, start_ms, end_ms
+                FROM asr_segments
+                WHERE video_id = ? AND start_ms <= ? AND ? <= end_ms
+                ORDER BY (end_ms - start_ms) ASC
+                LIMIT 1
+                """,
+                (vid, t_ms, t_ms),
+            ).fetchone()
+            if row and row["text_raw"]:
+                return {
+                    "asr_text": str(row["text_raw"]),
+                    "start_ms": int(row["start_ms"]),
+                    "end_ms": int(row["end_ms"]),
+                }
+
+            row = self.conn.execute(
+                """
+                SELECT text_raw, start_ms, end_ms,
+                       CASE
+                           WHEN ? < start_ms THEN start_ms - ?
+                           WHEN ? > end_ms THEN ? - end_ms
+                           ELSE 0
+                       END AS dist
+                FROM asr_segments
+                WHERE video_id = ?
+                ORDER BY dist ASC
+                LIMIT 1
+                """,
+                (t_ms, t_ms, t_ms, t_ms, vid),
+            ).fetchone()
+            if row and row["text_raw"] and int(row["dist"]) <= 4000:
+                return {
+                    "asr_text": str(row["text_raw"]),
+                    "start_ms": int(row["start_ms"]),
+                    "end_ms": int(row["end_ms"]),
+                }
+        return None
+
 
 def fuse_with_asr(
     base_results: list[dict[str, Any]],
