@@ -387,7 +387,7 @@ def select_frame_context(
     frames: List[Dict[str, Any]],
     timestamp_ms: int,
     *,
-    count: int = 49,
+    count: int = 0,
     before: int = 24,
     after: int = 24,
 ) -> List[Dict[str, Any]]:
@@ -397,6 +397,12 @@ def select_frame_context(
         range(len(frames)),
         key=lambda index: abs(int(frames[index]["timestamp_ms"]) - timestamp_ms),
     )
+    if count <= 0 or count >= len(frames):
+        selected = [dict(frame) for frame in frames]
+        if 0 <= center_index < len(selected):
+            selected[center_index]["is_current"] = True
+        return selected
+
     start = max(0, center_index - before)
     end = min(len(frames), center_index + after + 1)
     selected = [dict(frame) for frame in frames[start:end]]
@@ -865,13 +871,13 @@ def create_app(
         return {"frames": frames, "returned": len(frames), "window_size": 24}
 
     @app.get("/frame-context/{video_id}")
-    async def frame_context(video_id: str, timestamp_ms: int, count: int = 49):
+    async def frame_context(video_id: str, timestamp_ms: int = 0, count: int = 0):
         if not metadata_ready.is_set():
             raise HTTPException(status_code=503, detail="Frame metadata is loading")
         frames = select_frame_context(frames_by_video.get(video_id, []), timestamp_ms, count=count)
         if not frames:
             raise HTTPException(status_code=404, detail="Synthetic frame metadata not found")
-        return {"frames": frames, "returned": len(frames), "window_size": count}
+        return {"frames": frames, "returned": len(frames), "window_size": count or len(frames)}
 
     LOCAL_KEYFRAME_ROOTS: List[Path] = []
     env_keyframes = os.getenv("KEYFRAMES_DIR") or os.getenv("LOCAL_KEYFRAME_DIR")
