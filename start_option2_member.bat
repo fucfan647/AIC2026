@@ -38,16 +38,14 @@ if errorlevel 1 (
     pip install fastapi uvicorn websockets httpx
 )
 
-set "CLIENT_PORT=8082"
-
 echo.
 echo =====================================================================
 echo  HỆ THỐNG ĐANG KHỞI CHẠY...
-echo  - Mở trình duyệt tại máy bạn: http://127.0.0.1:%CLIENT_PORT%
+echo  - Mở trình duyệt tại máy bạn: http://127.0.0.1:8081
 echo  - Nhập tên của bạn ở góc trên giao diện và bắt đầu tìm kiếm!
 echo =====================================================================
 echo.
 
-python frontend\serve_frontend.py --host 127.0.0.1 --port %CLIENT_PORT% --backend-url %BACKEND_URL% --team-hub-url %TEAM_HUB_URL% --hls-server-url %HLS_SERVER_URL% --keyframes-dir "%KEYFRAMES_DIR%"
+python frontend\serve_frontend.py --host 127.0.0.1 --port 8081 --backend-url %BACKEND_URL% --team-hub-url %TEAM_HUB_URL% --hls-server-url %HLS_SERVER_URL% --keyframes-dir "%KEYFRAMES_DIR%"
 
 pause
