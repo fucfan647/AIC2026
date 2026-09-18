@@ -19,9 +19,8 @@ set "KEYFRAMES_DIR=F:\AI\AIC2026\data\synthetic_frames"
 set "SERVER_IP=192.168.20.156"
 
 set "TEAM_HUB_URL=http://%SERVER_IP%:8080"
-set "BACKEND_URL=http://%SERVER_IP%:8037"
-set "HLS_SERVER_URL=http://%SERVER_IP%:8052"
-set "TRANSLATOR_URL=http://%SERVER_IP%:8031"
+set "BACKEND_URL=http://%SERVER_IP%:8080"
+set "HLS_SERVER_URL=http://%SERVER_IP%:8080"
 
 echo.
 echo [1/3] Kiểm tra Python...
