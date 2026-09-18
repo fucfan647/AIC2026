@@ -604,7 +604,9 @@ async def forward_urllib_request(req: urllib.request.Request, timeout: int = 30)
         loop = asyncio.get_running_loop()
         status, headers, body = await loop.run_in_executor(None, urllib_request_bytes, req, timeout)
     except Exception as exc:  # noqa: BLE001
-        return JSONResponse({"detail": f"Goi DRES/backend that bai: {exc}"}, status_code=502)
+        target_url = getattr(req, "full_url", str(req))
+        print(f"[proxy-error] Goi {target_url} that bai: {exc}", flush=True)
+        return JSONResponse({"detail": f"Goi {target_url} that bai: {exc}"}, status_code=502)
 
     response_headers = {}
     for key, value in headers.items():
