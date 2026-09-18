@@ -11,12 +11,12 @@ echo  - Đồng bộ khay ghim & nộp bài tập trung về Server Linux (cổn
 echo =====================================================================
 
 :: 1. CẤU HÌNH ĐƯỜNG DẪN ẢNH SSD TRÊN MÁY BẠN
-:: Thay đổi đường dẫn tới thư mục ảnh synthetic_frames_webp trên SSD của bạn:
-set "KEYFRAMES_DIR=D:\keyframes_AIC_2026"
+:: Thay đổi đường dẫn tới thư mục keyframe trên SSD của bạn:
+set "KEYFRAMES_DIR=F:\AI\AIC2026\data\synthetic_frames"
 
 :: 2. ĐỊA CHỈ SERVER LINUX (Vừa làm Team Hub cổng 8080, vừa làm GPU AI cổng 8036)
 :: Thay <IP_SERVER_LINUX> bằng IP thực tế của Server (ví dụ: 192.168.1.50):
-set "SERVER_IP=127.0.0.1"
+set "SERVER_IP=192.168.20.156"
 
 set "TEAM_HUB_URL=http://%SERVER_IP%:8080"
 set "BACKEND_URL=http://%SERVER_IP%:8036"
