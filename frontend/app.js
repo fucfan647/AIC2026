@@ -142,7 +142,6 @@ const els = {
   expandShotContextBtn: document.getElementById('expandShotContextBtn'),
   expandFrameContextBtn: document.getElementById('expandFrameContextBtn'),
   videoFrameStrip: document.getElementById('videoFrameStrip'),
-  videoTextHud: document.getElementById('videoTextHud'),
   videoModal: document.getElementById('videoModal'),
   modalTitle: document.getElementById('modalTitle'),
   closeVideoBtn: document.getElementById('closeVideoBtn'),
@@ -1568,9 +1567,6 @@ function updateVideoFrameStripActive(autoScroll = false) {
   });
   if (nearest) {
     nearest.classList.add('is-active');
-    if (nearest.dataset.keyframeId) {
-      updateVideoTextHud(nearest.dataset.keyframeId);
-    }
     if (autoScroll && !state.isScrubbingStrip && !els.player.paused) {
       const now = performance.now();
       if (now - lastAutoScrollTime > 380) {
@@ -1859,11 +1855,6 @@ function closeVideo() {
   els.player.removeAttribute('poster');
   els.player.load();
   if (els.videoFrameStrip) els.videoFrameStrip.innerHTML = '';
-  if (els.videoTextHud) {
-    els.videoTextHud.hidden = true;
-    els.videoTextHud.innerHTML = '';
-  }
-  currentVideoHudKeyframe = '';
   closeShotOverview();
   closeFrameOverview();
   state.activeShotContextFrames = [];
@@ -2276,13 +2267,15 @@ function renderFrameTextDetails(container, data, item, isLoading = false) {
   const hasAsrTime = asrStart !== null && asrStart !== undefined && asrEnd !== null && asrEnd !== undefined;
   const asrTimeStr = hasAsrTime ? `[${formatVideoTime(Number(asrStart) / 1000)} – ${formatVideoTime(Number(asrEnd) / 1000)}]` : '';
 
-  const ocrEmptyText = isLoading ? 'Đang tải OCR...' : 'Không phát hiện văn bản trong frame này';
-  const asrEmptyText = isLoading ? 'Đang tải ASR...' : 'Không có lời thoại tại đoạn này';
+  const ocrEmptyText = isLoading ? 'Đang tải dữ liệu OCR...' : 'Không phát hiện chữ trong frame này';
+  const asrEmptyText = isLoading ? 'Đang tải dữ liệu ASR...' : 'Không có lời thoại tại đoạn này';
 
   const ocrHtml = `
     <div class="frame-text-card ocr-card">
       <div class="frame-text-card-head">
-        <span class="frame-text-badge ocr-badge"><i data-lucide="scan-text"></i> OCR Text</span>
+        <div class="frame-text-badge-wrap">
+          <span class="frame-text-badge ocr-badge"><i data-lucide="scan-text"></i> OCR TEXT</span>
+        </div>
         ${ocrText ? `<button class="text-copy-btn" type="button" data-copy-text="${escapeHtml(ocrText)}"><i data-lucide="copy"></i> Copy</button>` : ''}
       </div>
       <div class="frame-text-content ${ocrText ? '' : 'frame-text-empty'}">
@@ -2294,8 +2287,10 @@ function renderFrameTextDetails(container, data, item, isLoading = false) {
   const asrHtml = `
     <div class="frame-text-card asr-card">
       <div class="frame-text-card-head">
-        <span class="frame-text-badge asr-badge"><i data-lucide="mic"></i> ASR Lời Thoại</span>
-        ${asrTimeStr ? `<span class="frame-text-time">${escapeHtml(asrTimeStr)}</span>` : ''}
+        <div class="frame-text-badge-wrap">
+          <span class="frame-text-badge asr-badge"><i data-lucide="mic"></i> ASR LỜI THOẠI</span>
+          ${asrTimeStr ? `<span class="frame-text-time">${escapeHtml(asrTimeStr)}</span>` : ''}
+        </div>
         ${asrText ? `<button class="text-copy-btn" type="button" data-copy-text="${escapeHtml(asrText)}"><i data-lucide="copy"></i> Copy</button>` : ''}
       </div>
       <div class="frame-text-content ${asrText ? '' : 'frame-text-empty'}">
@@ -2325,31 +2320,6 @@ function renderFrameTextDetails(container, data, item, isLoading = false) {
     });
   });
   refreshIcons(container);
-}
-
-let currentVideoHudKeyframe = '';
-async function updateVideoTextHud(keyframeId) {
-  if (!els.videoTextHud || !keyframeId) return;
-  if (currentVideoHudKeyframe === keyframeId) return;
-  currentVideoHudKeyframe = keyframeId;
-  const data = await fetchFrameText(keyframeId);
-  if (currentVideoHudKeyframe !== keyframeId) return;
-  const ocr = (data?.ocr_text || '').trim();
-  const asr = (data?.asr_text || '').trim();
-  if (!ocr && !asr) {
-    els.videoTextHud.hidden = true;
-    els.videoTextHud.innerHTML = '';
-    return;
-  }
-  let html = '';
-  if (ocr) {
-    html += `<div class="video-text-hud-item"><span class="video-text-hud-tag ocr">OCR</span><span class="video-text-hud-text" title="${escapeHtml(ocr)}">${escapeHtml(ocr)}</span></div>`;
-  }
-  if (asr) {
-    html += `<div class="video-text-hud-item"><span class="video-text-hud-tag asr">ASR</span><span class="video-text-hud-text" title="${escapeHtml(asr)}">${escapeHtml(asr)}</span></div>`;
-  }
-  els.videoTextHud.innerHTML = html;
-  els.videoTextHud.hidden = false;
 }
 
 function openFrameImage(item) {
