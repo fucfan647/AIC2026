@@ -59,8 +59,8 @@
   "frontend": {
     "host": "0.0.0.0",
     "port": 8080,
-    "backend_url": "http://127.0.0.1:8036",
-    "hls_server_url": "http://127.0.0.1:8052",
+    "backend_url": "http://192.168.20.156:8080",
+    "hls_server_url": "http://192.168.20.156:8080",
     "translator_url": "http://127.0.0.1:8031",
     "open_browser": false
   }
