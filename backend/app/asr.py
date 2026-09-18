@@ -20,7 +20,8 @@ def fold_asr_text(value: str) -> str:
 
 
 def build_asr_fts_query(query: str) -> str:
-    tokens = [token for token in _TOKEN_RE.findall(fold_asr_text(query)) if token]
+    normalized = unicodedata.normalize("NFC", " ".join(str(query).casefold().split()))
+    tokens = [token for token in _TOKEN_RE.findall(normalized) if token]
     if not tokens:
         raise ValueError("ASR query contains no searchable tokens")
     escaped = [token.replace('"', '""') for token in tokens]
@@ -96,6 +97,9 @@ class AsrTextIndex:
             str(row["key"]): json.loads(row["value"])
             for row in self.conn.execute("SELECT key, value FROM index_meta")
         }
+        if self.metadata.get("search_diacritics") != "preserve":
+            self.conn.close()
+            raise ValueError(f"ASR index needs accent-aware reindexing: {self.path}")
 
     @property
     def num_segments(self) -> int:
@@ -126,7 +130,7 @@ class AsrTextIndex:
         with self._lock:
             rows = self.conn.execute(
                 f"""
-                SELECT s.*, bm25(asr_fts, 1.0, 1.0) AS bm25_score
+                SELECT s.*, bm25(asr_fts, 1.0) AS bm25_score
                 FROM asr_fts
                 JOIN asr_segments AS s ON s.segment_rowid = asr_fts.rowid
                 WHERE asr_fts MATCH ?{video_clause}
@@ -328,7 +332,7 @@ def build_asr_index(*, asr_videos_dir: Path, records_db: Path, output_path: Path
                     rows_by_shot,
                     shots_by_video,
                 )
-                text_raw = str(segment.get("text_raw") or "").strip()
+                text_raw = unicodedata.normalize("NFC", str(segment.get("text_raw") or "").strip())
                 normalized = fold_asr_text(str(segment.get("text_normalized") or text_raw))
                 batch.append(
                     (
@@ -360,18 +364,18 @@ def build_asr_index(*, asr_videos_dir: Path, records_db: Path, output_path: Path
             CREATE INDEX idx_asr_segments_shot ON asr_segments(video_id, shot_id);
             CREATE VIRTUAL TABLE asr_fts USING fts5(
                 text_raw,
-                text_normalized,
                 content='asr_segments',
                 content_rowid='segment_rowid',
-                tokenize='unicode61 remove_diacritics 2'
+                tokenize='unicode61 remove_diacritics 0'
             );
-            INSERT INTO asr_fts(rowid, text_raw, text_normalized)
-            SELECT segment_rowid, text_raw, text_normalized FROM asr_segments WHERE text_normalized != '';
+            INSERT INTO asr_fts(rowid, text_raw)
+            SELECT segment_rowid, text_raw FROM asr_segments WHERE text_raw != '';
             """
         )
         fallback_count = int(conn.execute("SELECT COUNT(*) FROM asr_segments WHERE overlap_ms = 0").fetchone()[0])
         metadata = {
-            "schema_version": 1,
+            "schema_version": 2,
+            "search_diacritics": "preserve",
             "num_videos": video_count,
             "num_segments": segment_count,
             "num_fallback_mappings": fallback_count,

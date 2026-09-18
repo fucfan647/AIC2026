@@ -40,7 +40,8 @@ VIDEO_RANGES="artifacts/current_index/video_ranges.json"
 EMBEDDINGS="embeddings.npy"
 CONFIG_JSON="artifacts/current_index/index_config.json"
 ASR_INDEX="artifacts/asr_index/asr.sqlite"
-OCR_INDEX="artifacts/current_index/monkey_ocr.sqlite"
+PPOCR_INDEX="artifacts/current_index/paddle_ocr.sqlite"
+MONKEY_OCR_INDEX="artifacts/current_index/monkey_ocr.sqlite"
 
 BEIT3_DIR="$SCRIPT_DIR/merged_beit3_large_numeric"
 BEIT3_RUNTIME="$SCRIPT_DIR/beit3_runtime"
@@ -79,8 +80,8 @@ exec -a "$PROC_TITLE" "$PY_BIN" -u -m app.lazy_server \
   "${BEIT3_ARGS[@]}" \
   --config "$CONFIG_JSON" \
   --asr-index "$ASR_INDEX" \
-  --ocr-index "$OCR_INDEX" \
-  --monkey-ocr-index "$OCR_INDEX" \
+  --ocr-index "$PPOCR_INDEX" \
+  --monkey-ocr-index "$MONKEY_OCR_INDEX" \
   --host "$HOST" \
   --port "$PORT" \
   --storage-backend file \

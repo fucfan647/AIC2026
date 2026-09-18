@@ -54,7 +54,7 @@ Hệ thống được thiết kế theo mô hình kiến trúc phân tán hiệu
 |   - embedder.py: Trích xuất vector MetaCLIP-2 (512D) & BEiT-3 (1024D)   |
 |   - index.py: GPU Cosine Similarity Dot-Product & SQLite Metadata Filter|
 |   - temporal_search.py: Khớp chuỗi sự kiện A -> B -> C qua Sliding Window|
-|   - ocr.py & asr.py: BM25/Fuzzy Search trên OCR (Monkey/PP) & ASR Audio |
+|   - ocr.py & asr.py: BM25 trên OCR (Monkey/PP) & ASR Audio |
 +-------------------------------------------------------------------------+
 ```
 
@@ -149,7 +149,7 @@ backend/
 4. **`app/temporal_search.py`**:
    - `TemporalSearchService`: Thuật toán 2 giai đoạn (Stage 1 Top-K Candidate Selection + Stage 2 Local Search & Window Filtering) giúp truy tìm chính xác chuỗi hành động diễn ra liên tiếp trong cùng một video.
 5. **`app/ocr.py` & `app/asr.py`**:
-   - Tìm kiếm từ khóa text xuất hiện trên màn hình hoặc trong lời thoại với thuật toán đối sánh từ vựng (BM25 / Substring Matching) và trộn điểm số (Score Fusion) vào điểm Visual.
+   - Tìm kiếm từ khóa text xuất hiện trên màn hình hoặc trong lời thoại bằng BM25; MonkeyOCR và Chunkformer phân biệt dấu, còn PaddleOCR bỏ dấu. Điểm text được trộn với điểm Visual.
 
 ---
 
@@ -282,7 +282,7 @@ cd system
 bash run_backend.sh
 ```
 * Script tự động tìm môi trường Python (Conda hoặc `.venv`), cấu hình GPU 0 (có thể ghi đè qua `GPU_ID=1 bash run_backend.sh`), bind cổng `0.0.0.0:8036`.
-* `run_backend.sh` là launcher cũ, dùng các biến đường dẫn trong chính script chứ chưa đọc `system.config.json`. Nếu đưa backend lên Linux với thư mục khác, sửa các biến `RECORDS_DB`, `VIDEO_RANGES`, `EMBEDDINGS`, `CONFIG_JSON`, `ASR_INDEX`, `OCR_INDEX`, `BEIT3_DIR`, `BEIT3_RUNTIME` và tham số `--model-name` trong file này.
+* `run_backend.sh` là launcher cũ, dùng các biến đường dẫn trong chính script chứ chưa đọc `system.config.json`. Nếu đưa backend lên Linux với thư mục khác, sửa các biến `RECORDS_DB`, `VIDEO_RANGES`, `EMBEDDINGS`, `CONFIG_JSON`, `ASR_INDEX`, `PPOCR_INDEX`, `MONKEY_OCR_INDEX`, `BEIT3_DIR`, `BEIT3_RUNTIME` và tham số `--model-name` trong file này.
 * Tiến trình được tự động ngụy trang với tên **`aic_system`** trên `nvitop` và `nvidia-smi` để quản lý tập trung và bảo mật khi thi đấu.
 
 #### 💻 Bước 2: Khởi động Frontend trên Máy Cá Nhân (Windows)

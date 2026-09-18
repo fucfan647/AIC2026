@@ -55,6 +55,8 @@ backend/embeddings.npy
 # --- Databases & Large JSONL Index Files ---
 *.sqlite
 *.sqlite3
+*.sqlite.before_accent.bak
+*.sqlite.accent.tmp
 *.db
 *.jsonl
 
