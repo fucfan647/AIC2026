@@ -12,6 +12,7 @@ if (-not $SkipCheck) {
 $config = Read-AicSystemConfig -ConfigPath $ConfigPath
 $python = Get-AicPythonExecutable -Config $config
 
+$env:SSLKEYLOGFILE = $null
 $env:HLS_SERVER_URL = [string]$config.frontend.hls_server_url
 $env:TRANSLATOR_URL = [string]$config.frontend.translator_url
 $env:SUBMISSION_SOUND_ROOT = Resolve-AicSystemPath -Value ([string]$config.paths.music_root)
