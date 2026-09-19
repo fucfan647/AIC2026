@@ -29,6 +29,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 
 
@@ -68,7 +69,7 @@ def resolve_submission_sound_root() -> Path:
 
 SUBMISSION_SOUND_ROOT = resolve_submission_sound_root()
 SUBMISSION_SOUND_SUFFIXES = {".aac", ".flac", ".m4a", ".mp3", ".ogg", ".wav"}
-FORWARDED_HEADERS = ("Content-Type", "Range", "Accept", "User-Agent")
+FORWARDED_HEADERS = ("Content-Type", "Range", "Accept", "User-Agent", "Accept-Encoding")
 QUERY_FILENAME_PATTERN = re.compile(r"^query-(.+)-(kis|qa|trake)\.txt$", re.IGNORECASE)
 EVENT_PATTERN = re.compile(r"^\s*E\d+\s*:", re.IGNORECASE | re.MULTILINE)
 TIMED_PATH_PREFIXES = (
@@ -677,6 +678,7 @@ def create_app(
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    app.add_middleware(GZipMiddleware, minimum_size=1000)
 
     async def proxy_team_hub(request: Request, subpath: str) -> Response:
         target_url = team_hub_url.rstrip("/") + subpath
