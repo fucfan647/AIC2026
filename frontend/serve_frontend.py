@@ -931,46 +931,78 @@ def create_app(
                 c / "synthetic_frames",
                 c / "synthetic_frames" / "synthetic_frames",
                 c / "synthetic_frames_webp",
+                c / "keyframes",
+                c / "keyframes_AIC_2026",
             ]:
                 if sub.is_dir() and sub not in LOCAL_KEYFRAME_ROOTS:
                     LOCAL_KEYFRAME_ROOTS.append(sub)
+            try:
+                for child in c.iterdir():
+                    if child.is_dir() and (
+                        child.name.startswith(("L", "K"))
+                        or "synthetic" in child.name.lower()
+                        or "keyframe" in child.name.lower()
+                    ):
+                        if child not in LOCAL_KEYFRAME_ROOTS:
+                            LOCAL_KEYFRAME_ROOTS.append(child)
+            except Exception:
+                pass
 
     if LOCAL_KEYFRAME_ROOTS:
         print(f"[frontend] Local keyframe roots active ({len(LOCAL_KEYFRAME_ROOTS)}): {[str(r) for r in LOCAL_KEYFRAME_ROOTS]}", flush=True)
+
+    _local_keyframe_cache: Dict[str, Optional[Path]] = {}
 
     def resolve_local_keyframe_file(keyframe_id: str) -> Optional[Path]:
         raw = urllib.parse.unquote(str(keyframe_id)).strip()
         if not raw:
             return None
+        if raw in _local_keyframe_cache:
+            return _local_keyframe_cache[raw]
+
         stem = Path(raw).stem
         parts = stem.rsplit("_", 1)
         if len(parts) == 2:
             video_id, frame_idx = parts[0], parts[1]
+            batch_folder = video_id.split("_")[0]
             try:
                 num = int(frame_idx)
                 names = [
-                    f"{num:03d}.jpg", f"{num}.jpg", f"{frame_idx}.jpg", f"{frame_idx}.jpeg",
                     f"{num:03d}.webp", f"{num}.webp", f"{frame_idx}.webp",
+                    f"{num:04d}.webp", f"{num:05d}.webp", f"{num:06d}.webp",
+                    f"{num:03d}.jpg", f"{num}.jpg", f"{frame_idx}.jpg", f"{frame_idx}.jpeg",
+                    f"{num:04d}.jpg", f"{num:05d}.jpg", f"{num:06d}.jpg",
                 ]
             except ValueError:
-                names = [f"{frame_idx}.jpg", f"{frame_idx}.jpeg", f"{frame_idx}.webp"]
+                names = [f"{frame_idx}.webp", f"{frame_idx}.jpg", f"{frame_idx}.jpeg"]
+
             for root in LOCAL_KEYFRAME_ROOTS:
                 if not root.is_dir():
                     continue
                 for name in names:
                     target = root / video_id / name
                     if target.is_file():
+                        _local_keyframe_cache[raw] = target
                         return target
+                    target_batch = root / batch_folder / video_id / name
+                    if target_batch.is_file():
+                        _local_keyframe_cache[raw] = target_batch
+                        return target_batch
+
         for root in LOCAL_KEYFRAME_ROOTS:
             if not root.is_dir():
                 continue
             p = root / raw
             if p.is_file():
+                _local_keyframe_cache[raw] = p
                 return p
-            for ext in (".jpg", ".jpeg", ".webp"):
+            for ext in (".webp", ".jpg", ".jpeg"):
                 cand = root / f"{raw}{ext}"
                 if cand.is_file():
+                    _local_keyframe_cache[raw] = cand
                     return cand
+
+        _local_keyframe_cache[raw] = None
         return None
 
     @app.get("/keyframe/{keyframe_id:path}")
