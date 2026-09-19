@@ -667,7 +667,7 @@ def create_app(
     threading.Thread(target=load_metadata_background, daemon=True).start()
     team_socket_hub = TeamSocketHub()
     team_state_lock = asyncio.Lock()
-    team_hub_client = httpx.AsyncClient(timeout=60.0) if team_hub_url else None
+    team_hub_client = httpx.AsyncClient(timeout=60.0, trust_env=False) if team_hub_url else None
     app = FastAPI(title="AIC2026 Frontend", default_response_class=JSONResponse)
 
     app.add_middleware(
@@ -754,6 +754,12 @@ def create_app(
         )
         return response
 
+    backend_http_client = httpx.AsyncClient(
+        timeout=httpx.Timeout(connect=8.0, read=120.0, write=15.0, pool=30.0),
+        limits=httpx.Limits(max_keepalive_connections=50, max_connections=100),
+        trust_env=False,
+    )
+
     async def proxy_backend(request: Request, backend_path: str, timeout: int = 300) -> Response:
         body = await request.body() if request.method in {"POST", "PUT", "PATCH"} else None
         headers = {}
@@ -762,8 +768,28 @@ def create_app(
             if value:
                 headers[key] = value
         target = backend_url.rstrip("/") + backend_path
-        req = urllib.request.Request(target, data=body, headers=headers, method=request.method)
-        return await forward_urllib_request(req, timeout=timeout)
+        try:
+            req = backend_http_client.build_request(
+                request.method,
+                target,
+                content=body,
+                headers=headers,
+                timeout=timeout,
+            )
+            resp = await backend_http_client.send(req)
+            response_headers = {}
+            for k, v in resp.headers.items():
+                if k.lower() not in {"connection", "transfer-encoding", "content-encoding"}:
+                    response_headers[k] = v
+            return Response(
+                content=resp.content,
+                status_code=resp.status_code,
+                headers=response_headers,
+                media_type=resp.headers.get("content-type"),
+            )
+        except Exception as exc:  # noqa: BLE001
+            print(f"[proxy-error] Goi {target} that bai: {exc}", flush=True)
+            return JSONResponse({"detail": f"Goi {target} that bai: {exc}"}, status_code=502)
 
     def get_video_path(video_id: str) -> Path:
         if not video_id or any(part in video_id for part in ("..", "/", "\\")):
@@ -1027,10 +1053,12 @@ def create_app(
         timeout=httpx.Timeout(connect=8.0, read=60.0, write=10.0, pool=30.0),
         limits=httpx.Limits(max_keepalive_connections=50, max_connections=100),
         follow_redirects=True,
+        trust_env=False,
     )
 
     @app.on_event("shutdown")
-    async def shutdown_hls_client():
+    async def shutdown_clients():
+        await backend_http_client.aclose()
         await hls_http_client.aclose()
         if team_hub_client is not None:
             await team_hub_client.aclose()

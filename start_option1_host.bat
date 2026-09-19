@@ -10,16 +10,16 @@ echo  - Lưu file nộp bài: Thư mục frontend\submission\ tại máy này
 echo  - Quản lý khay ghim & WebSocket đồng bộ cả đội
 echo =====================================================================
 
-:: 1. CẤU HÌNH ĐƯỜNG DẪN ẢNH SSD TRÊN MÁY ĐỘI TRƯỞNG (HOST)
-:: Chỉnh sửa đường dẫn dưới đây tới thư mục chứa ảnh synthetic_frames trên SSD máy bạn:
-set "KEYFRAMES_DIR=F:\AI\AIC2026\data\synthetic_frames"
+:: 1. CẤU HÌNH ĐƯỜNG DẪN ẢNH SSD TRÊN MÁY ĐỘI TRƯỞNG
+:: Chỉnh sửa đường dẫn dưới đây tới thư mục chứa ảnh synthetic_frames_webp trên SSD của bạn:
+set "KEYFRAMES_DIR=D:\keyframes_AIC_2026"
 
-:: 2. ĐỊA CHỈ SERVER LINUX GPU (Chạy AI Search và HLS stream)
-:: IP Server GPU thực tế:
-set "SERVER_IP=192.168.20.156"
+:: 2. ĐỊA CHỈ SERVER GPU (Chạy AI Search trên Linux Server)
+:: Thay <IP_SERVER_GPU> bằng IP thực tế của Server (ví dụ: 192.168.1.50):
+set "BACKEND_URL=http://127.0.0.1:8036"
 
-set "BACKEND_URL=http://%SERVER_IP%:8036"
-set "HLS_SERVER_URL=http://%SERVER_IP%:8052"
+:: 3. HLS SERVER (Nếu có stream video)
+set "HLS_SERVER_URL=http://127.0.0.1:8052"
 
 echo.
 echo [1/3] Kiểm tra Python...
