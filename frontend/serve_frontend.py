@@ -948,10 +948,17 @@ def create_app(
             except Exception:
                 pass
 
+    if keyframes_dir:
+        exists_str = "TỒN TẠI: CÓ" if keyframes_dir.exists() else "TỒN TẠI: KHÔNG (Sai đường dẫn!)"
+        print(f"[frontend] Đường dẫn keyframes_dir: {keyframes_dir} -> {exists_str}", flush=True)
+
     if LOCAL_KEYFRAME_ROOTS:
-        print(f"[frontend] Local keyframe roots active ({len(LOCAL_KEYFRAME_ROOTS)}): {[str(r) for r in LOCAL_KEYFRAME_ROOTS]}", flush=True)
+        print(f"[frontend] ĐÃ KÍCH HOẠT {len(LOCAL_KEYFRAME_ROOTS)} thư mục ảnh SSD: {[str(r) for r in LOCAL_KEYFRAME_ROOTS[:3]]}...", flush=True)
+    else:
+        print(f"[frontend] \033[91m[CẢNH BÁO]\033[0m Chưa nhận diện được thư mục ảnh nào trên SSD! Mọi ảnh sẽ bị kéo từ Server qua mạng làm chậm hệ thống!", flush=True)
 
     _local_keyframe_cache: Dict[str, Optional[Path]] = {}
+    _missing_warning_count = 0
 
     def resolve_local_keyframe_file(keyframe_id: str) -> Optional[Path]:
         raw = urllib.parse.unquote(str(keyframe_id)).strip()
@@ -1002,7 +1009,11 @@ def create_app(
                     _local_keyframe_cache[raw] = cand
                     return cand
 
+        nonlocal _missing_warning_count
         _local_keyframe_cache[raw] = None
+        if _missing_warning_count < 3:
+            _missing_warning_count += 1
+            print(f"[frontend] \033[93m[Thiếu ảnh SSD]\033[0m Không tìm thấy {raw} trong các thư mục SSD -> Kéo từ Server: {[str(r) for r in LOCAL_KEYFRAME_ROOTS[:2]]}", flush=True)
         return None
 
     @app.get("/keyframe/{keyframe_id:path}")
