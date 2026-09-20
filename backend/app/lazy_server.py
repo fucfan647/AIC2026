@@ -454,6 +454,53 @@ def make_handler(runtime: Runtime):
                     )
                 json_response(self, 200, payload)
                 return
+            if parsed.path.startswith("/frame-text/"):
+                if not runtime.ready:
+                    json_response(self, 503, {"detail": f"backend is still loading ({runtime.stage})"})
+                    return
+                keyframe_id = unquote(parsed.path[len("/frame-text/"):].strip())
+                rec = runtime.state.metadata.get_by_keyframe_id(keyframe_id)
+                if rec is None:
+                    json_response(self, 404, {"detail": "unknown keyframe_id"})
+                    return
+                row_id = rec.get("row_id")
+                video_id = str(rec.get("video_id") or "")
+                shot_id = rec.get("shot_id")
+                timestamp_ms = int(rec.get("timestamp_ms", 0) or 0)
+                image_file = str(rec.get("image_file") or "")
+
+                ocr_info = None
+                active_ocr_index = runtime.monkey_ocr_index or runtime.ocr_index
+                if active_ocr_index is not None:
+                    ocr_info = active_ocr_index.get_frame_ocr(row_id=row_id, keyframe_id=keyframe_id)
+
+                asr_info = None
+                if runtime.asr_index is not None:
+                    asr_info = runtime.asr_index.get_frame_asr(
+                        video_id=video_id,
+                        timestamp_ms=timestamp_ms,
+                        keyframe_id=keyframe_id,
+                    )
+
+                response_data = {
+                    "keyframe_id": keyframe_id,
+                    "video_id": video_id,
+                    "shot_id": shot_id,
+                    "timestamp_ms": timestamp_ms,
+                    "timestamp_seconds": round(timestamp_ms / 1000.0, 3),
+                    "image_file": image_file,
+                    "ocr_text": ocr_info["ocr_text"] if ocr_info else "",
+                    "ocr_avg_confidence": ocr_info["avg_confidence"] if ocr_info else 0.0,
+                    "ocr_max_confidence": ocr_info["max_confidence"] if ocr_info else 0.0,
+                    "ocr_line_count": ocr_info["line_count"] if ocr_info else 0,
+                    "asr_text": asr_info["asr_text"] if asr_info else "",
+                    "asr_start_ms": asr_info["start_ms"] if asr_info else None,
+                    "asr_end_ms": asr_info["end_ms"] if asr_info else None,
+                    "asr_start_seconds": round(asr_info["start_ms"] / 1000.0, 3) if asr_info and asr_info["start_ms"] is not None else None,
+                    "asr_end_seconds": round(asr_info["end_ms"] / 1000.0, 3) if asr_info and asr_info["end_ms"] is not None else None,
+                }
+                json_response(self, 200, response_data)
+                return
             image_route = next(
                 (
                     prefix
