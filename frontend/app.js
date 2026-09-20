@@ -1304,6 +1304,26 @@ function groupShotSuggestions(results, limit) {
     .map((item, index) => ({...item, rank: index + 1}));
 }
 
+function groupTemporalSuggestions(results, limit, maxPerGroup = 5, hasVideoFilter = false) {
+  const groups = new Map();
+  for (const item of sortResults(results)) {
+    const key = hasVideoFilter
+      ? (item.shot_id == null ? `frame:${item.keyframe_id}` : `shot:${normalizeVideoId(item.video_id)}:${item.shot_id}`)
+      : `video:${normalizeVideoId(item.video_id)}`;
+    if (!groups.has(key)) groups.set(key, []);
+    const sequences = groups.get(key);
+    if (sequences.length < maxPerGroup) sequences.push(item);
+  }
+  return [...groups.values()]
+    .sort((left, right) =>
+      Math.max(...right.map(item => Number(item.sequence_score ?? item.temporal_score ?? item.score ?? item.cosine_similarity ?? 0)))
+      - Math.max(...left.map(item => Number(item.sequence_score ?? item.temporal_score ?? item.score ?? item.cosine_similarity ?? 0)))
+    )
+    .flat()
+    .slice(0, limit)
+    .map((item, index) => ({...item, rank: index + 1}));
+}
+
 function syncFusionWeights() {
   // Fusion weight summary is rendered and synced per stage card in renderStages()
 }
@@ -4392,7 +4412,7 @@ async function performSearch(requestedTemporalStageIndex = null, translatedQuery
       : (payload.results || []).map(item => ({...item, stage: 1}));
     const filteredResults = applyVideoFilter(backendResults, videoFilter);
     state.results = temporal
-      ? filteredResults.slice(0, 200)
+      ? groupTemporalSuggestions(filteredResults, 200, 5, Boolean(videoFilter))
       : multi ? filteredResults.slice(0, top_k)
       : groupShotSuggestions(filteredResults, top_k);
     const renderStarted = performance.now();
