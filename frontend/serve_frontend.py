@@ -17,6 +17,7 @@ import mimetypes
 import os
 import random
 import re
+import sqlite3
 import threading
 import time
 import urllib.error
@@ -45,11 +46,17 @@ USER_PROFILES_PATH = FRONTEND_DIR / "runtime" / "user_profiles.json"
 SUBMISSION_LOG_PATH = FRONTEND_DIR / "runtime" / "submission_log.json"
 SUBMISSION_ACTIVITY_CSV_PATH = FRONTEND_DIR / "runtime" / "submission_activity.csv"
 HLS_ROOT = Path("/mlcv1/Datasets/HCMAI25/streaming/hls")
-DEFAULT_RECORDS_PATH = (
-    FRONTEND_DIR.parent
-    / "backend/artifacts/current_index/records.sqlite"
+_REPO_RECORDS_PATH = FRONTEND_DIR.parent / "backend/artifacts/current_index/records.sqlite"
+_RESOURCE_RECORDS_PATH = (
+    FRONTEND_DIR.parent.parent
+    / "aic2026_resources/aic_resource/01_records_db/backend/artifacts/current_index/records.sqlite"
 )
+DEFAULT_RECORDS_PATH = _REPO_RECORDS_PATH if _REPO_RECORDS_PATH.is_file() else _RESOURCE_RECORDS_PATH
 DEFAULT_DELETED_MANIFEST = FRONTEND_DIR.parent / "frames_deleted/active_deleted_manifest.jsonl"
+DEFAULT_ASR_INDEX = Path(os.environ["ASR_INDEX"]) if os.getenv("ASR_INDEX") else (
+    FRONTEND_DIR.parent.parent
+    / "aic2026_resources/aic_resource/10_asr_index/backend/artifacts/asr_index/asr.sqlite"
+)
 def resolve_submission_sound_root() -> Path:
     env_path = os.getenv("SUBMISSION_SOUND_ROOT")
     if env_path and Path(env_path).is_dir():
@@ -76,6 +83,7 @@ TIMED_PATH_PREFIXES = (
     "/temporal-search",
     "/translate-query",
     "/frame-text/",
+    "/video-asr/",
     "/thumbnail/",
     "/keyframe/",
     "/keyframe-webp/",
@@ -632,12 +640,14 @@ def create_app(
     keyframes_dir: Optional[Path] = None,
     thumbnail_root: Optional[Path] = None,
     team_hub_url: str = "",
+    asr_index_path: Optional[Path] = None,
 ) -> FastAPI:
     if not team_hub_url:
         team_hub_url = os.getenv("TEAM_HUB_URL", "").strip()
     team_hub_url = team_hub_url.rstrip("/")
 
     translator_url = os.getenv("TRANSLATOR_URL", "http://127.0.0.1:8031")
+    asr_index_path = Path(asr_index_path or DEFAULT_ASR_INDEX).resolve()
     video_path_by_id: Dict[str, str] = {}
     shot_frames_by_video: Dict[str, List[Dict[str, Any]]] = {}
     frames_by_video: Dict[str, List[Dict[str, Any]]] = {}
@@ -876,12 +886,47 @@ def create_app(
     async def frame_text(keyframe_id: str, request: Request):
         return await proxy_backend(request, f"/frame-text/{urllib.parse.quote(keyframe_id)}")
 
+    @app.get("/video-asr/{video_id}")
+    async def video_asr(video_id: str):
+        if not video_id or any(part in video_id for part in ("..", "/", "\\")):
+            raise HTTPException(status_code=400, detail="Invalid video id")
+        if not asr_index_path.is_file():
+            raise HTTPException(status_code=503, detail=f"ASR index not found: {asr_index_path}")
+
+        def read_segments() -> List[Dict[str, Any]]:
+            connection = sqlite3.connect(
+                f"file:{asr_index_path.as_posix()}?mode=ro",
+                uri=True,
+                timeout=10,
+            )
+            connection.row_factory = sqlite3.Row
+            try:
+                rows = connection.execute(
+                    """
+                    SELECT segment_id, start_ms, end_ms, text_raw
+                    FROM asr_segments
+                    WHERE UPPER(video_id) = UPPER(?)
+                    ORDER BY start_ms, end_ms, segment_id
+                    """,
+                    (video_id,),
+                ).fetchall()
+                return [dict(row) for row in rows]
+            finally:
+                connection.close()
+
+        try:
+            segments = await asyncio.to_thread(read_segments)
+        except sqlite3.Error as exc:
+            raise HTTPException(status_code=500, detail=f"Cannot read ASR index: {exc}") from exc
+        return {"video_id": video_id.upper(), "segments": segments, "returned": len(segments)}
+
     @app.post("/temporal-search")
     async def temporal_search(request: Request):
         return await proxy_backend(request, "/temporal-search")
 
     @app.get("/shot-context/{video_id}/{shot_id}")
     async def shot_context(
+        request: Request,
         video_id: str,
         shot_id: int,
         keyframe_id: str = "",
@@ -900,16 +945,25 @@ def create_app(
             timestamp_ms=timestamp_ms,
         )
         if not frames:
-            raise HTTPException(status_code=404, detail="Shot metadata not found")
+            query = urllib.parse.urlencode({
+                "keyframe_id": keyframe_id,
+                **({"timestamp_ms": timestamp_ms} if timestamp_ms is not None else {}),
+            })
+            path = f"/shot-context/{urllib.parse.quote(video_id)}/{shot_id}"
+            return await proxy_backend(request, f"{path}?{query}" if query else path)
         return {"frames": frames, "returned": len(frames), "window_size": 24}
 
     @app.get("/frame-context/{video_id}")
-    async def frame_context(video_id: str, timestamp_ms: int = 0, count: int = 0):
+    async def frame_context(request: Request, video_id: str, timestamp_ms: int = 0, count: int = 0):
         if not metadata_ready.is_set():
             raise HTTPException(status_code=503, detail="Frame metadata is loading")
         frames = select_frame_context(frames_by_video.get(video_id, []), timestamp_ms, count=count)
         if not frames:
-            raise HTTPException(status_code=404, detail="Synthetic frame metadata not found")
+            query = urllib.parse.urlencode({"timestamp_ms": timestamp_ms, "count": count})
+            return await proxy_backend(
+                request,
+                f"/frame-context/{urllib.parse.quote(video_id)}?{query}",
+            )
         return {"frames": frames, "returned": len(frames), "window_size": count or len(frames)}
 
     LOCAL_KEYFRAME_ROOTS: List[Path] = []
@@ -2010,6 +2064,7 @@ def create_app(
     app.state.team_state_path = team_state_path
     app.state.team_capture_dir = team_capture_dir
     app.state.team_hub_url = team_hub_url
+    app.state.asr_index_path = asr_index_path
     return app
 
 
@@ -2025,6 +2080,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--hls-server-url", default=os.getenv("HLS_SERVER_URL", "http://127.0.0.1:8052"))
     parser.add_argument("--records-path", type=Path, default=DEFAULT_RECORDS_PATH)
+    parser.add_argument("--asr-index", type=Path, default=DEFAULT_ASR_INDEX)
     parser.add_argument("--deleted-manifest", type=Path, default=DEFAULT_DELETED_MANIFEST)
     parser.add_argument("--query-root", type=Path, default=QUERY_ROOT)
     parser.add_argument(
@@ -2056,6 +2112,7 @@ def main() -> int:
         keyframes_dir=args.keyframes_dir,
         thumbnail_root=getattr(args, "thumbnail_root", None),
         team_hub_url=args.team_hub_url,
+        asr_index_path=args.asr_index,
     )
     print(f"Frontend FastAPI: http://{args.host}:{args.port}/")
     print(f"Proxy backend: {args.backend_url}")
@@ -2065,6 +2122,7 @@ def main() -> int:
         print("Team Hub: Master Mode (hosting WebSocket /ws/team & saving submissions locally)")
     print(f"Remote HLS server: {args.hls_server_url}")
     print(f"Video records: {args.records_path} (metadata preload runs in background)")
+    print(f"Local ASR index: {args.asr_index}")
     print(f"Deleted frame filter: {args.deleted_manifest} ({len(app.state.deleted_rows)} rows)")
     uvicorn.run(app, host=args.host, port=args.port, log_level="info")
     return 0

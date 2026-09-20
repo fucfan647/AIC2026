@@ -120,9 +120,18 @@
       <div id="videoActiveQueryContent" class="video-active-query-content" hidden></div>
       <div class="video-main-layout">
         <div class="video-player-column">
-          <div id="videoShell" class="video-shell">
-            <video id="player" class="modal-video" playsinline preload="metadata"></video>
-            <div id="videoScrubHud" class="video-scrub-hud" aria-live="polite" hidden></div>
+          <div class="video-playback-row">
+            <div id="videoShell" class="video-shell">
+              <video id="player" class="modal-video" playsinline preload="metadata"></video>
+              <div id="videoScrubHud" class="video-scrub-hud" aria-live="polite" hidden></div>
+            </div>
+            <section id="videoFrameTextPanel" class="video-frame-text-panel" aria-live="polite" hidden>
+              <div class="video-frame-text-head">
+                <strong>ASR toàn bộ video</strong>
+                <span id="videoFrameTextLabel">Chưa xác định frame</span>
+              </div>
+              <div id="videoFrameTextDetails" class="image-text-details video-frame-text-details"></div>
+            </section>
           </div>
           <div class="video-controls" aria-label="Điều khiển video">
             <div class="video-control-row">
@@ -149,6 +158,7 @@
                   <button id="videoSubmitCurrentBtn" class="video-submit-current-btn" type="button" title="Submit frame đang hiển thị lên DRES" aria-label="Submit frame đang hiển thị lên DRES"><i data-lucide="send"></i></button>
                 </div>
                 <div class="video-btn-group">
+                  <button id="videoTextToggleBtn" class="video-context-btn video-text-toggle-btn" type="button" title="Hiện hoặc ẩn ASR tại thời điểm video đang phát" aria-pressed="false"><i data-lucide="mic"></i>ASR</button>
                   <button id="expandShotContextBtn" class="video-context-btn" type="button" title="Xem toàn bộ 24 shot lân cận" disabled><i data-lucide="gallery-horizontal-end"></i>24 shot</button>
                   <button id="expandFrameContextBtn" class="video-context-btn" type="button" title="Xem 48 frame lân cận frame đang hiển thị"><i data-lucide="images"></i>48 frame</button>
                 </div>
