@@ -22,7 +22,7 @@ set "ASR_INDEX=C:\uit\aic2026_resources\aic_resource\10_asr_index\backend\artifa
 set "SERVER_IP=192.168.20.156"
 
 set "TEAM_HUB_URL=http://192.168.20.156:8080"
-set "BACKEND_URL=http://192.168.20.156:8080"
+set "BACKEND_URL=http://127.0.0.1:8036"
 set "HLS_SERVER_URL=http://192.168.20.156:8080"
 set "TRANSLATOR_URL=http://127.0.0.1:8031"
 
