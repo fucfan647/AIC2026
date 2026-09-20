@@ -856,6 +856,7 @@ function renderStages() {
     const isCompletedTemporalStage = index < state.temporalStage;
     const stageOcrPercent = normalizeOcrPercent(stage.ocrWeight, 41);
     const stageAsrPercent = normalizeAsrPercent(stage.asrWeight, 20);
+    const stageVgPercent = stage.visualGuidanceWeight != null ? stage.visualGuidanceWeight : 25;
     const card = document.createElement('section');
     card.className = 'stage-card';
     card.dataset.stageId = stage.id;
@@ -887,6 +888,16 @@ function renderStages() {
         <input class="stage-asr-weight" type="range" min="0" max="100" value="${stageAsrPercent}" step="1" aria-label="Độ chú trọng ASR Query ${stageNumber}" />
 
         <small class="fusion-weight-summary"></small>
+
+        ${index > 0 ? `
+        <label class="vg-query-field" style="display: block; margin-top: 8px; padding-top: 6px; border-top: 1px dashed var(--border-subtle, rgba(255,255,255,0.12));">
+          <span class="query-field-heading" style="display: flex; justify-content: space-between; align-items: center; font-size: 11px;">
+            <span><b class="query-field-icon" aria-hidden="true">👁️</b>Visual Guidance (Dẫn đường ảnh)</span>
+            <output class="stage-vg-weight-value" style="font-weight: 600; color: #38bdf8;">${stageVgPercent}%</output>
+          </span>
+          <input class="stage-vg-weight" type="range" min="0" max="50" value="${stageVgPercent}" step="5" aria-label="Visual Guidance Query ${stageNumber}" style="width: 100%; margin-top: 4px;" />
+          <small class="vg-summary-text" style="display: block; font-size: 10px; opacity: 0.75; margin-top: 2px;">${stageVgPercent}% ảnh mỏ neo trước + ${100 - stageVgPercent}% câu chữ mới</small>
+        </label>` : ''}
 
         ${isCompletedTemporalStage ? `<button class="translate-query-btn" type="button" data-temporal-search-stage="${index}">Tìm lại Query ${stageLetter(index)}</button>` : ''}
       </div>`;
@@ -941,6 +952,18 @@ function renderStages() {
     const stageAsrInput = card.querySelector('.stage-asr-weight');
     const stageOcrQuery = card.querySelector('.stage-ocr-query');
     const stageAsrQuery = card.querySelector('.stage-asr-query');
+    const stageVgInput = card.querySelector('.stage-vg-weight');
+    const stageVgOutput = card.querySelector('.stage-vg-weight-value');
+    const stageVgNote = card.querySelector('.vg-summary-text');
+    if (stageVgInput && stageVgOutput) {
+      stageVgInput.addEventListener('input', () => {
+        stage.visualGuidanceWeight = Number(stageVgInput.value);
+        stageVgOutput.textContent = `${stage.visualGuidanceWeight}%`;
+        if (stageVgNote) {
+          stageVgNote.textContent = `${stage.visualGuidanceWeight}% ảnh mỏ neo trước + ${100 - stage.visualGuidanceWeight}% câu chữ mới`;
+        }
+      });
+    }
 
     const updateStageFusionSummary = () => {
       const summary = card.querySelector('.fusion-weight-summary');
@@ -1112,7 +1135,8 @@ function addTemporalStage() {
     asrWeight: normalizeAsrPercent(
       state.stages[state.stages.length - 1]?.asrWeight,
       20
-    )
+    ),
+    visualGuidanceWeight: 25
   });
 
   // Render UI ngay lập tức để người dùng thấy Tab B được thêm vào
@@ -4278,6 +4302,7 @@ async function performSearch(requestedTemporalStageIndex = null, translatedQuery
           asr_query: temporalAsrQuery,
           embedding_model: state.embeddingModel,
           search_mode: temporalOcrQuery || temporalAsrQuery ? 'hybrid' : 'visual',
+          visual_guidance_weight: temporalStageIndex > 0 ? (Number(state.stages[temporalStageIndex]?.visualGuidanceWeight ?? 25) / 100) : 0,
           ...temporalWeights,
           stage: temporalStageIndex + 1,
           video_id: temporalStageIndex === 0 ? (videoFilter || undefined) : undefined
@@ -4389,7 +4414,8 @@ async function performSearch(requestedTemporalStageIndex = null, translatedQuery
           ocrQuery: '',
           asrQuery: '',
           ocrWeight: 0,
-          asrWeight: 0
+          asrWeight: 0,
+          visualGuidanceWeight: 25
         });
       }
     }
@@ -4468,7 +4494,7 @@ async function performSearch(requestedTemporalStageIndex = null, translatedQuery
     const weightMeta = similarity
       ? `Ảnh tương tự · nguồn ${state.similarityItem.keyframe_id}${state.similarityQuery.trim() ? ` · Ảnh ${100 - state.similarityTextWeight}% / mô tả ${state.similarityTextWeight}%` : ''}`
       : temporal
-      ? `Query ${stageLetter(Math.max(0, Number(payload.stage || 1) - 1))} · cửa sổ ${Number(payload.parameters?.temporal_window_ms || 60000) / 1000} giây · model cố định ${modelLabel}`
+      ? `Query ${stageLetter(Math.max(0, Number(payload.stage || 1) - 1))} · cửa sổ ${Number(payload.parameters?.temporal_window_ms || 60000) / 1000} giây${payload.stage_config?.visual_guidance_weight ? ` · VG ${Math.round(payload.stage_config.visual_guidance_weight * 100)}%` : ''} · model cố định ${modelLabel}`
       : multi
       ? `${queries.length} Query${asrOnly ? ' · Chỉ ASR' : ''}`
       : `Hình ảnh ${Math.round(Number(requestBody.metaclip_weight) * 100)}% · Text OCR ${Math.round(Number(requestBody.ocr_weight) * 100)}% · ASR ${Math.round(Number(requestBody.asr_weight || 0) * 100)}%${ocrQuery ? ` · OCR “${ocrQuery}”` : ''}${asrQuery ? ` · ASR “${asrQuery}”` : ''}`;
@@ -4501,7 +4527,7 @@ function resetWorkspace() {
   }
   state.temporalSessionId = null;
   state.temporalStage = 0;
-  state.stages = [{id: Date.now(), name: 'Hành động A', query: '', translatedQuery: '', ocrQuery: '', asrQuery: '', ocrWeight: 41, asrWeight: 20}];
+  state.stages = [{id: Date.now(), name: 'Hành động A', query: '', translatedQuery: '', ocrQuery: '', asrQuery: '', ocrWeight: 41, asrWeight: 20, visualGuidanceWeight: 25}];
   state.results = [];
   hideCorrectCelebration();
   clearSubmissionFeedback();

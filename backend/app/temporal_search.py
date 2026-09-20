@@ -247,6 +247,11 @@ class TemporalSearchService:
         sequence_build_ms = 0.0
         best_by_key: dict[tuple[str, ...], dict] = {}
         local_candidates = 0
+        state = self.states[config["embedding_model"]]
+        vg_weight = float(config.get("visual_guidance_weight", 0.25))
+        base_query_vector = prepared.get("query_vector")
+        base_vec_np = None if base_query_vector is None else np.asarray(base_query_vector, dtype=np.float32)
+
         for parent in parent_sequences:
             scenes = parent["scenes"]
             anchor = scenes[-1]
@@ -259,12 +264,36 @@ class TemporalSearchService:
             if len(candidates) == 0:
                 continue
 
+            guided_query_vector = None
+            if (
+                vg_weight > 0
+                and base_vec_np is not None
+                and hasattr(state, "embeddings")
+            ):
+                anchor_row_id = anchor.get("source_embedding_row")
+                if anchor_row_id is None and "keyframe_id" in anchor and hasattr(state, "metadata"):
+                    rec = state.metadata.get_by_keyframe_id(str(anchor["keyframe_id"]))
+                    if rec is not None:
+                        anchor_row_id = rec.get("row_id")
+                if anchor_row_id is not None:
+                    try:
+                        anchor_vector = np.asarray(state.embeddings[int(anchor_row_id)], dtype=np.float32)
+                        text_weight = max(0.0, 1.0 - vg_weight)
+                        image_weight = vg_weight
+                        combined = text_weight * base_vec_np + image_weight * anchor_vector
+                        norm = float(np.linalg.norm(combined))
+                        if np.isfinite(norm) and norm > 0:
+                            guided_query_vector = combined / norm
+                    except Exception:
+                        guided_query_vector = None
+
             local_results, search_info = self._search_stage(
                 config,
                 candidate_indices=candidates,
                 top_k=self.local_top_k,
                 video_id=str(anchor["video_id"]),
                 prepared=prepared,
+                override_query_vector=guided_query_vector,
             )
             local_search_ms += float(search_info["total_ms"])
             build_started = time.perf_counter()
@@ -381,9 +410,10 @@ class TemporalSearchService:
             semantic_weight = float(request.get("metaclip_weight", 1.0))
             ocr_weight = float(request.get("ocr_weight", 0.0))
             asr_weight = float(request.get("asr_weight", 0.0))
+            visual_guidance_weight = float(request.get("visual_guidance_weight", 0.25))
         except (TypeError, ValueError) as exc:
             raise TemporalSearchError(f"invalid fusion weight: {exc}") from None
-        if any(weight < 0 or weight > 1 for weight in (semantic_weight, ocr_weight, asr_weight)):
+        if any(weight < 0 or weight > 1 for weight in (semantic_weight, ocr_weight, asr_weight, visual_guidance_weight)):
             raise TemporalSearchError("fusion weights must be between 0 and 1")
         if semantic_weight + ocr_weight + asr_weight <= 0:
             raise TemporalSearchError("at least one fusion weight must be positive")
@@ -407,6 +437,7 @@ class TemporalSearchService:
             "metaclip_weight": semantic_weight,
             "ocr_weight": ocr_weight,
             "asr_weight": asr_weight,
+            "visual_guidance_weight": visual_guidance_weight,
         }
 
     def _prepare_stage(self, config: dict) -> dict:
@@ -439,6 +470,7 @@ class TemporalSearchService:
         top_k: int,
         video_id: str | None,
         prepared: dict | None = None,
+        override_query_vector: np.ndarray | None = None,
     ) -> tuple[list[dict], dict]:
         started = time.perf_counter()
         prepared = prepared or self._prepare_stage(config)
@@ -452,9 +484,10 @@ class TemporalSearchService:
         retrieval_started = time.perf_counter()
         visual_results = []
         total_matches = 0
-        if prepared["query_vector"] is not None and config["metaclip_weight"] > 0:
+        active_query_vector = override_query_vector if override_query_vector is not None else prepared["query_vector"]
+        if active_query_vector is not None and config["metaclip_weight"] > 0:
             selected, scores, total_matches = state.index.search(
-                prepared["query_vector"],
+                active_query_vector,
                 top_k=requested_top_k,
                 min_score=None,
                 candidate_indices=candidate_indices,
