@@ -39,22 +39,12 @@ const state = {
   activeVideoItem: null,
   activeShotContextFrames: [],
   activeFrameContextFrames: [],
-  frameOverviewFrames: [],
   imageItem: null,
   shotContextCache: new Map(),
   submissionFeedback: new Map(),
   handledSubmissionEvents: new Set(),
   videoFps: {default_fps: 25, overrides: {}},
-  isScrubbingStrip: false,
-  hasDraggedStrip: false,
-  stripRafId: null,
-  isInitialVideoLoad: false,
-  showVideoFrameText: false,
-  activeVideoTextKeyframeId: '',
-  activeVideoTextItem: null,
-  activeVideoAsrEntries: [],
-  activeVideoAsrContext: null,
-  activeVideoAsrHighlightKey: ''
+  isSearching: false
 };
 
 const DRES_CACHE_KEY = 'aic_dres_session_v1';
@@ -111,6 +101,7 @@ const els = {
   resultCount: document.getElementById('resultCount'),
   searchMeta: document.getElementById('searchMeta'),
   embeddingModelToggle: document.getElementById('embeddingModelToggle'),
+  ocrModelToggle: document.getElementById('ocrModelToggle'),
 
   searchTimingBtn: document.getElementById('searchTimingBtn'),
   selectedFrames: document.getElementById('selectedFrames'),
@@ -128,7 +119,6 @@ const els = {
   videoTrakeSubmitBtn: document.getElementById('videoTrakeSubmitBtn'),
   videoTrakeFrames: document.getElementById('videoTrakeFrames'),
   videoShell: document.getElementById('videoShell'),
-  videoScrubHud: document.getElementById('videoScrubHud'),
   player: document.getElementById('player'),
   videoBackBtn: document.getElementById('videoBackBtn'),
   videoPlayBtn: document.getElementById('videoPlayBtn'),
@@ -146,10 +136,6 @@ const els = {
   videoFullscreenBtn: document.getElementById('videoFullscreenBtn'),
   captureFrameBtn: document.getElementById('captureFrameBtn'),
   videoSubmitCurrentBtn: document.getElementById('videoSubmitCurrentBtn'),
-  videoTextToggleBtn: document.getElementById('videoTextToggleBtn'),
-  videoFrameTextPanel: document.getElementById('videoFrameTextPanel'),
-  videoFrameTextLabel: document.getElementById('videoFrameTextLabel'),
-  videoFrameTextDetails: document.getElementById('videoFrameTextDetails'),
   expandShotContextBtn: document.getElementById('expandShotContextBtn'),
   expandFrameContextBtn: document.getElementById('expandFrameContextBtn'),
   videoFrameStrip: document.getElementById('videoFrameStrip'),
@@ -168,7 +154,6 @@ const els = {
   imageTitle: document.getElementById('imageTitle'),
   imagePreview: document.getElementById('imagePreview'),
   imageMeta: document.getElementById('imageMeta'),
-  imageTextDetails: document.getElementById('imageTextDetails'),
   imageAddTrayBtn: document.getElementById('imageAddTrayBtn'),
   closeImageBtn: document.getElementById('closeImageBtn'),
   errorBanner: document.getElementById('errorBanner'),
@@ -868,8 +853,6 @@ function renderStages() {
         <label class="text-query-field">
           <span class="query-field-heading"><b class="query-field-icon" aria-hidden="true">${stageLetter(index)}</b>Text Query</span>
           <textarea class="text-query" placeholder="Mô tả hành động ${stageLetter(index)}..."></textarea>
-          <button class="translate-query-btn" type="button" data-translate-query title="Dịch Text Query sang tiếng Anh bằng HPLT">Dịch sang English</button>
-          <div class="translated-query-row" ${stage.translatedQuery ? '' : 'hidden'}><strong>English:</strong> <span class="translated-query-text"></span></div>
         </label>
 
         <label class="ocr-query-field">
@@ -896,26 +879,16 @@ function renderStages() {
       textarea.value = stage.query || '';
       textarea.addEventListener('input', () => {
         stage.query = textarea.value;
-        stage.translatedQuery = '';
-        const translatedRow = card.querySelector('.translated-query-row');
-        if (translatedRow) translatedRow.hidden = true;
         updateStageFusionSummary();
       });
       textarea.addEventListener('keydown', event => {
         if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
           event.preventDefault();
           event.stopPropagation();
-          performSearch(state.searchMode === 'temporal' ? index : null);
+          performSearch();
         }
       });
     }
-
-    const translatedText = card.querySelector('.translated-query-text');
-    if (translatedText) translatedText.textContent = stage.translatedQuery || '';
-    card.querySelector('[data-translate-query]')?.addEventListener('click', event => {
-      event.preventDefault();
-      translateQueryInput(event.currentTarget, stage);
-    });
 
     if (isCompletedTemporalStage) {
       const stageHead = card.querySelector('.stage-head');
@@ -927,6 +900,7 @@ function renderStages() {
       stageHead?.addEventListener('keydown', event => {
         if (event.key === 'Enter' && !event.isComposing) {
           event.preventDefault();
+          event.stopPropagation();
           performSearch(index);
           return;
         }
@@ -966,7 +940,8 @@ function renderStages() {
       stageOcrQuery.addEventListener('keydown', event => {
         if (event.key === 'Enter' && !event.isComposing) {
           event.preventDefault();
-          performSearch(state.searchMode === 'temporal' ? index : null);
+          event.stopPropagation();
+          performSearch();
         }
       });
     }
@@ -983,7 +958,7 @@ function renderStages() {
         if (event.key === 'Enter' && !event.isComposing) {
           event.preventDefault();
           event.stopPropagation();
-          performSearch(state.searchMode === 'temporal' ? index : null);
+          performSearch();
         }
       });
     }
@@ -1077,7 +1052,7 @@ function invalidateTemporalResults() {
   state.results = [];
   resetSearchTiming();
   renderResults();
-  els.searchMeta.textContent = 'Chưa tìm kiếm';
+  els.searchMeta.textContent = 'Chưa tìm kiếm · OCR Union (Monkey + PP)';
   showError('');
 }
 
@@ -1142,73 +1117,6 @@ function collectQueries() {
     .map(textarea => textarea.value.trim());
 }
 
-function looksLikeVietnameseQuery(text) {
-  const source = String(text || '').trim().toLocaleLowerCase('vi');
-  if (!source) return false;
-  if (/[ăâđêôơưàáạảãằắặẳẵầấậẩẫèéẹẻẽềếệểễìíịỉĩòóọỏõồốộổỗờớợởỡùúụủũừứựửữỳýỵỷỹ]/i.test(source)) {
-    return true;
-  }
-  const commonWords = new Set([
-    'mot', 'nguoi', 'dang', 'nhung', 'trong', 'tren', 'duoi', 'voi', 'khong',
-    'co', 'con', 'cai', 'chiec', 'xe', 'di', 'chay', 'dung', 'ngoi', 'an',
-    'uong', 'cam', 'lay', 'dua', 'vao', 'ra', 'phai', 'trai', 'phia', 'truoc',
-    'sau', 'gan', 'canh', 'mac', 'ao', 'quan', 'mau', 'den', 'trang', 'do',
-    'xanh', 'vang', 'noi', 'chuyen', 'nhin', 'thay', 'hinh', 'anh'
-  ]);
-  const matches = source.match(/[a-z]+/g) || [];
-  return matches.filter(word => commonWords.has(word)).length >= 2;
-}
-
-async function requestEnglishTranslation(source) {
-  const response = await fetch('/translate-query', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({text: source})
-  });
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(payload.detail || `HTTP ${response.status}`);
-  const translation = String(payload.translation || '').trim();
-  if (!translation) throw new Error('Model không trả về bản dịch.');
-  return {translation, latencyMs: Number(payload.latency_ms || 0)};
-}
-
-function showStageTranslation(stage, translation) {
-  stage.translatedQuery = translation;
-  const card = [...document.querySelectorAll('.stage-card')]
-    .find(item => String(item.dataset.stageId) === String(stage.id));
-  const translatedRow = card?.querySelector('.translated-query-row');
-  const translatedText = card?.querySelector('.translated-query-text');
-  if (translatedText) translatedText.textContent = translation;
-  if (translatedRow) translatedRow.hidden = false;
-}
-
-async function translateQueryInput(button, stage) {
-  const field = button.closest('.text-query-field');
-  const textarea = field?.querySelector('.text-query');
-  const source = textarea?.value.trim() || '';
-  if (!textarea || !source) {
-    showError('Nhập Text Query trước khi dịch.');
-    textarea?.focus();
-    return;
-  }
-
-  button.disabled = true;
-  const originalLabel = button.textContent;
-  button.textContent = 'Đang dịch…';
-  showError('');
-  try {
-    const {translation, latencyMs} = await requestEnglishTranslation(source);
-    showStageTranslation(stage, translation);
-    setStatus(`Đã dịch bằng HPLT (${latencyMs.toFixed(0)} ms)`, 'ok');
-  } catch (error) {
-    showError(`Dịch query thất bại: ${error.message || error}`);
-    setStatus('Dịch thất bại', 'error');
-  } finally {
-    button.disabled = false;
-    button.textContent = originalLabel;
-  }
-}
-
 function collectOcrQueries() {
   return state.stages.map(stage => String(stage.ocrQuery || '').trim());
 }
@@ -1244,6 +1152,17 @@ function syncEmbeddingModelControls() {
   }
 }
 
+function syncOcrModelControls() {
+  if (els.ocrModelToggle) {
+    els.ocrModelToggle.dataset.model = 'union';
+    els.ocrModelToggle.textContent = 'OCR Union';
+    els.ocrModelToggle.title = 'Đang dùng chế độ Hợp nhất OCR: MonkeyOCR v2 + PP-OCRv6 (Ưu tiên Recall tối đa).';
+    els.ocrModelToggle.setAttribute('aria-label', 'Mô hình OCR: Hợp nhất MonkeyOCR và PP-OCR');
+    els.ocrModelToggle.classList.add('is-union');
+    els.ocrModelToggle.classList.remove('is-ppocr');
+  }
+}
+
 async function refreshHealth() {
   try {
     const resp = await fetch('/health');
@@ -1272,6 +1191,7 @@ async function refreshHealth() {
     }
     renderStages();
     syncEmbeddingModelControls();
+    syncOcrModelControls();
     setStatus('Đã kết nối', 'ok');
   } catch {
     setStatus('Mất kết nối', 'error');
@@ -1282,26 +1202,6 @@ function sortResults(results) {
   return [...results].sort((a, b) =>
     Number(b.sequence_score ?? b.score ?? 0) - Number(a.sequence_score ?? a.score ?? 0)
   );
-}
-
-function groupShotSuggestions(results, limit) {
-  const groups = new Map();
-  for (const item of sortResults(results)) {
-    const key = item.shot_id == null
-      ? `frame:${item.keyframe_id}`
-      : `shot:${normalizeVideoId(item.video_id)}:${item.shot_id}`;
-    if (!groups.has(key)) groups.set(key, []);
-    const frames = groups.get(key);
-    if (frames.length < 5) frames.push(item);
-  }
-  return [...groups.values()]
-    .sort((left, right) =>
-      Math.max(...right.map(item => Number(item.cosine_similarity ?? item.score ?? 0)))
-      - Math.max(...left.map(item => Number(item.cosine_similarity ?? item.score ?? 0)))
-    )
-    .flat()
-    .slice(0, limit)
-    .map((item, index) => ({...item, rank: index + 1}));
 }
 
 function syncFusionWeights() {
@@ -1363,7 +1263,7 @@ function applyVideoFilter(results, videoFilter) {
 }
 
 function searchTopK() {
-  return 200;
+  return 100;
 }
 
 function formatVideoTime(seconds) {
@@ -1411,10 +1311,6 @@ function openVideoIcon() {
   return '<i data-lucide="clapperboard" aria-hidden="true"></i>';
 }
 
-function framesGalleryIcon() {
-  return '<i data-lucide="images" aria-hidden="true"></i>';
-}
-
 function zoomIcon() {
   return '<i data-lucide="zoom-in" aria-hidden="true"></i>';
 }
@@ -1437,16 +1333,7 @@ function updateVideoControls() {
   els.videoVolumeValue.textContent = `${Math.round(effectiveVolume * 100)}%`;
   els.videoTime.textContent = `${formatVideoTime(current)} / ${formatVideoTime(duration)}`;
   els.videoProgress.value = duration > 0 ? String(Math.round((current / duration) * 1000)) : '0';
-
-  // Do not allow premature 0.0s timeupdate during initial load to yank filmstrip back to frame 0
-  if (state.isInitialVideoLoad) {
-    const targetSeconds = (state.activeVideoItem ? answerTimeMs(state.activeVideoItem) / 1000.0 : 0) || 0;
-    if (targetSeconds > 0.5 && current < 0.1) {
-      return;
-    }
-  }
-
-  updateVideoFrameStripActive(true);
+  updateVideoFrameStripActive();
 }
 
 function setVideoRate(rate) {
@@ -1504,8 +1391,7 @@ function uniqueVideoFrames(videoId, activeItem) {
 
 function centerActiveFrameInStrip(smooth = false) {
   if (!els.videoFrameStrip) return;
-  const target = els.videoFrameStrip.querySelector('.video-frame-thumb.is-active')
-    || els.videoFrameStrip.querySelector('.is-candidate-shot');
+  const target = els.videoFrameStrip.querySelector('.is-candidate-shot') || els.videoFrameStrip.querySelector('.is-active');
   if (!target) return;
   const strip = els.videoFrameStrip;
   const stripWidth = strip.clientWidth;
@@ -1525,12 +1411,8 @@ function centerActiveFrameInStrip(smooth = false) {
 
 function renderVideoFrameItems(items, activeItem) {
   if (!els.videoFrameStrip) return;
-  if (items.length === 0) {
-    els.videoFrameStrip.innerHTML = '';
-    return;
-  }
-
-  const frag = document.createDocumentFragment();
+  els.videoFrameStrip.innerHTML = '';
+  if (items.length === 0) return;
   items.forEach(item => {
     const seconds = Number.isFinite(item.timestamp_seconds) ? item.timestamp_seconds : (answerTimeMs(item) / 1000);
     const isCurrentFrame = Boolean(item.is_current)
@@ -1540,7 +1422,6 @@ function renderVideoFrameItems(items, activeItem) {
     btn.className = `video-frame-thumb${isCurrentFrame ? ' is-candidate-shot is-active' : ''}`;
     btn.type = 'button';
     btn.dataset.seconds = String(seconds);
-    btn.dataset.keyframeId = String(item.keyframe_id || '');
     if (item.shot_id !== undefined) btn.dataset.shotId = String(item.shot_id ?? '');
     if (item.frame_id !== undefined) btn.dataset.frameId = String(item.frame_id ?? '');
     const titleText = item.frame_id !== undefined
@@ -1550,42 +1431,22 @@ function renderVideoFrameItems(items, activeItem) {
       ? `F${item.frame_id} · ${formatVideoTime(seconds)}`
       : formatVideoTime(seconds);
     btn.title = titleText;
-    const thumbnailUrl = item.thumbnail_url || item.image_url || `/thumbnail/${encodeURIComponent(item.keyframe_id)}`;
     btn.innerHTML = `
-      <span class="playhead-needle" aria-hidden="true"></span>
-      <img src="${escapeHtml(thumbnailUrl)}" alt="${item.video_id} ${item.frame_id !== undefined ? 'frame ' + item.frame_id : 'shot ' + item.shot_id}" loading="lazy" />
+      <img src="/thumbnail/${encodeURIComponent(item.keyframe_id)}" alt="${item.video_id} ${item.frame_id !== undefined ? 'frame ' + item.frame_id : 'shot ' + item.shot_id}" loading="lazy" />
       <span>${labelText}</span>`;
     btn.addEventListener('click', () => {
-      if (state.hasDraggedStrip) return;
       seekVideoToSeconds(seconds, true);
       centerActiveFrameInStrip(true);
     });
-    frag.appendChild(btn);
+    els.videoFrameStrip.appendChild(btn);
   });
 
-  // Temporarily hide visually to pre-position scrollLeft without showing frame 0
-  els.videoFrameStrip.style.visibility = 'hidden';
-  els.videoFrameStrip.innerHTML = '';
-  els.videoFrameStrip.appendChild(frag);
-
-  // Synchronously compute and align scroll position immediately
-  const target = els.videoFrameStrip.querySelector('.video-frame-thumb.is-candidate-shot')
-    || els.videoFrameStrip.querySelector('.video-frame-thumb.is-active');
-  if (target) {
-    const stripWidth = els.videoFrameStrip.clientWidth;
-    if (stripWidth > 0) {
-      const targetRect = target.getBoundingClientRect();
-      const stripRect = els.videoFrameStrip.getBoundingClientRect();
-      const relativeLeft = targetRect.left - stripRect.left + els.videoFrameStrip.scrollLeft;
-      const targetScrollLeft = relativeLeft - (stripWidth / 2) + (target.offsetWidth / 2);
-      els.videoFrameStrip.scrollLeft = Math.max(0, targetScrollLeft);
-    }
-  }
-  els.videoFrameStrip.style.visibility = '';
-
+  // Mathematically center the candidate frame (frame gốc) immediately upon rendering
   centerActiveFrameInStrip(false);
   window.requestAnimationFrame(() => centerActiveFrameInStrip(false));
-  window.setTimeout(() => centerActiveFrameInStrip(false), 40);
+  window.setTimeout(() => centerActiveFrameInStrip(false), 50);
+  window.setTimeout(() => centerActiveFrameInStrip(false), 150);
+  window.setTimeout(() => centerActiveFrameInStrip(false), 300);
   updateVideoFrameStripActive();
 }
 
@@ -1623,13 +1484,13 @@ function renderVideoFrameStrip(activeItem) {
     });
   }
 
-  // Load all frames of the video into the bottom filmstrip!
-  const frameCacheKey = `${activeItem.video_id}:all_frames`;
+  // Load 48 nearby frames into the bottom strip by default!
+  const frameCacheKey = `${activeItem.video_id}:frames:${timestampMs}`;
   let frameReq = state.shotContextCache.get(frameCacheKey);
   if (!frameReq) {
     const params = new URLSearchParams({
       timestamp_ms: String(timestampMs),
-      count: '0'
+      count: '49'
     });
     const url = `/frame-context/${encodeURIComponent(activeItem.video_id)}?${params}`;
     frameReq = fetch(url).then(async response => {
@@ -1646,16 +1507,13 @@ function renderVideoFrameStrip(activeItem) {
 
   frameReq.then(payload => {
     const isStillActive = state.activeVideoItem
-      && state.activeVideoItem.video_id === activeItem.video_id;
+      && state.activeVideoItem.video_id === activeItem.video_id
+      && state.activeVideoItem.keyframe_id === activeItem.keyframe_id;
     if (!isStillActive || !Array.isArray(payload.frames) || payload.frames.length === 0) return;
-    const mergedFrames = [...payload.frames];
-    if (activeItem?.keyframe_id && !mergedFrames.some(frame => frame.keyframe_id === activeItem.keyframe_id)) {
-      mergedFrames.push(activeItem);
-    }
-    state.activeFrameContextFrames = mergedFrames;
-    renderVideoFrameItems(mergedFrames, activeItem);
+    state.activeFrameContextFrames = payload.frames;
+    renderVideoFrameItems(payload.frames, activeItem);
 
-    // Ensure active/candidate frame is centered in view
+    // Ensure frame gốc is centered in view
     centerActiveFrameInStrip(false);
     window.requestAnimationFrame(() => centerActiveFrameInStrip(false));
     window.setTimeout(() => centerActiveFrameInStrip(false), 80);
@@ -1670,192 +1528,21 @@ function renderVideoFrameStrip(activeItem) {
   });
 }
 
-let lastAutoScrollTime = 0;
-
-function updateVideoFrameStripActive(autoScroll = false) {
+function updateVideoFrameStripActive() {
   if (!els.videoFrameStrip) return;
   const current = Number.isFinite(els.player.currentTime) ? els.player.currentTime : 0;
-  const thumbs = [...els.videoFrameStrip.querySelectorAll('.video-frame-thumb')];
-  let active = thumbs[0] || null;
-  thumbs.forEach(btn => {
+  let nearest = null;
+  let nearestDelta = Infinity;
+  els.videoFrameStrip.querySelectorAll('.video-frame-thumb').forEach(btn => {
     const seconds = Number(btn.dataset.seconds);
-    // Keep the latest extracted frame that has actually appeared in playback.
-    // Choosing the absolute nearest frame can switch OCR to a future frame early.
-    if (Number.isFinite(seconds) && seconds <= current + 0.001) active = btn;
+    const delta = Math.abs(seconds - current);
+    if (delta < nearestDelta) {
+      nearest = btn;
+      nearestDelta = delta;
+    }
     btn.classList.remove('is-active');
   });
-  if (active) {
-    active.classList.add('is-active');
-    updateVideoFrameText(active);
-    if (autoScroll && !state.isScrubbingStrip && !els.player.paused) {
-      const now = performance.now();
-      if (now - lastAutoScrollTime > 380) {
-        lastAutoScrollTime = now;
-        centerActiveFrameInStrip(true);
-      }
-    }
-  }
-}
-
-let scrubHudTimer = null;
-function showScrubHud(text, icon = '⏩') {
-  if (!els.videoScrubHud) return;
-  els.videoScrubHud.innerHTML = `<span class="hud-icon">${icon}</span><span>${text}</span>`;
-  els.videoScrubHud.hidden = false;
-  els.videoScrubHud.classList.add('is-visible');
-  if (scrubHudTimer) clearTimeout(scrubHudTimer);
-  scrubHudTimer = setTimeout(() => {
-    els.videoScrubHud.classList.remove('is-visible');
-    setTimeout(() => {
-      if (!els.videoScrubHud.classList.contains('is-visible')) {
-        els.videoScrubHud.hidden = true;
-      }
-    }, 200);
-  }, 750);
-}
-
-function getStripThumbAtClientX(clientX) {
-  if (!els.videoFrameStrip) return null;
-  const thumbs = Array.from(els.videoFrameStrip.querySelectorAll('.video-frame-thumb'));
-  if (thumbs.length === 0) return null;
-
-  for (const thumb of thumbs) {
-    const rect = thumb.getBoundingClientRect();
-    if (clientX >= rect.left && clientX <= rect.right) {
-      return thumb;
-    }
-  }
-
-  let nearest = thumbs[0];
-  let minDist = Infinity;
-  for (const thumb of thumbs) {
-    const rect = thumb.getBoundingClientRect();
-    const midX = rect.left + rect.width / 2;
-    const dist = Math.abs(clientX - midX);
-    if (dist < minDist) {
-      minDist = dist;
-      nearest = thumb;
-    }
-  }
-  return nearest;
-}
-
-let stripDragStartX = 0;
-
-function setupFilmstripScrubbing() {
-  if (!els.videoFrameStrip) return;
-
-  const handlePointerDown = (e) => {
-    if (e.button !== 0 && e.pointerType === 'mouse') return;
-    state.isScrubbingStrip = true;
-    state.hasDraggedStrip = false;
-    stripDragStartX = e.clientX;
-    els.videoFrameStrip.classList.add('is-scrubbing');
-    try {
-      els.videoFrameStrip.setPointerCapture(e.pointerId);
-    } catch (_) {}
-
-    const thumb = getStripThumbAtClientX(e.clientX);
-    if (thumb) {
-      const seconds = Number(thumb.dataset.seconds);
-      if (Number.isFinite(seconds)) {
-        seekVideoToSeconds(seconds, false);
-        updateVideoControls();
-      }
-    }
-  };
-
-  const handlePointerMove = (e) => {
-    if (!state.isScrubbingStrip) return;
-    if (Math.abs(e.clientX - stripDragStartX) > 4) {
-      state.hasDraggedStrip = true;
-    }
-
-    const stripRect = els.videoFrameStrip.getBoundingClientRect();
-    const edgeMargin = 45;
-    if (e.clientX < stripRect.left + edgeMargin) {
-      els.videoFrameStrip.scrollLeft -= 16;
-    } else if (e.clientX > stripRect.right - edgeMargin) {
-      els.videoFrameStrip.scrollLeft += 16;
-    }
-
-    if (state.stripRafId) return;
-    state.stripRafId = requestAnimationFrame(() => {
-      state.stripRafId = null;
-      if (!state.isScrubbingStrip) return;
-      const thumb = getStripThumbAtClientX(e.clientX);
-      if (thumb) {
-        const seconds = Number(thumb.dataset.seconds);
-        if (Number.isFinite(seconds)) {
-          seekVideoToSeconds(seconds, false);
-          updateVideoControls();
-        }
-      }
-    });
-  };
-
-  const handlePointerUp = (e) => {
-    if (!state.isScrubbingStrip) return;
-    state.isScrubbingStrip = false;
-    els.videoFrameStrip.classList.remove('is-scrubbing');
-    try {
-      els.videoFrameStrip.releasePointerCapture(e.pointerId);
-    } catch (_) {}
-
-    if (state.stripRafId) {
-      cancelAnimationFrame(state.stripRafId);
-      state.stripRafId = null;
-    }
-
-    centerActiveFrameInStrip(true);
-    setTimeout(() => {
-      state.hasDraggedStrip = false;
-    }, 50);
-  };
-
-  els.videoFrameStrip.addEventListener('pointerdown', handlePointerDown);
-  els.videoFrameStrip.addEventListener('pointermove', handlePointerMove);
-  els.videoFrameStrip.addEventListener('pointerup', handlePointerUp);
-  els.videoFrameStrip.addEventListener('pointercancel', handlePointerUp);
-}
-
-function handleVideoScrubWheel(e) {
-  if (!els.player) return;
-  e.preventDefault();
-
-  const duration = Number.isFinite(els.player.duration) ? els.player.duration : 0;
-  if (duration <= 0 && (!els.videoFrameStrip || els.videoFrameStrip.children.length === 0)) return;
-
-  // Lướt lên (deltaY < 0): Tua tiến về phía trước
-  // Lướt xuống (deltaY > 0): Tua lùi về phía sau
-  const isForward = e.deltaY < 0;
-
-  const absDelta = Math.abs(e.deltaY);
-  let step = 0.08;
-  if (absDelta > 150) {
-    step = 1.0;
-  } else if (absDelta > 60) {
-    step = 0.4;
-  } else if (absDelta > 25) {
-    step = 0.15;
-  } else {
-    step = 0.05;
-  }
-
-  if (e.shiftKey) step *= 4;
-
-  const current = Number.isFinite(els.player.currentTime) ? els.player.currentTime : 0;
-  const target = Math.max(0, Math.min(duration > 0 ? duration - 0.05 : current + step, current + (isForward ? step : -step)));
-
-  seekVideoToSeconds(target, false);
-  updateVideoControls();
-  centerActiveFrameInStrip(false);
-
-  const icon = isForward ? '⏩' : '⏪';
-  const sign = isForward ? '+' : '-';
-  const activeBtn = els.videoFrameStrip?.querySelector('.video-frame-thumb.is-active');
-  const frameInfo = activeBtn?.dataset.frameId ? ` · Frame ${activeBtn.dataset.frameId}` : '';
-  showScrubHud(`${sign}${step.toFixed(2)}s (${formatVideoTime(target)})${frameInfo}`, icon);
+  if (nearest) nearest.classList.add('is-active');
 }
 
 let expandBufferHandler = null;
@@ -1866,19 +1553,26 @@ function destroyActiveHls() {
     els.player.removeEventListener('seeking', expandBufferHandler);
     expandBufferHandler = null;
   }
-  if (!activeHls) return;
-  activeHls.destroy();
-  activeHls = null;
+  if (window.activeHls) {
+    try { window.activeHls.destroy(); } catch (_) {}
+    window.activeHls = null;
+  }
+  if (activeHls) {
+    try { activeHls.destroy(); } catch (_) {}
+    activeHls = null;
+  }
 }
 
 function loadVideoSource(videoId, startSeconds = 0) {
-  const hlsUrl = `/hls/${encodeURIComponent(videoId)}/playlist.m3u8`;
+  const hlsBase = window.DIRECT_HLS_URL ? String(window.DIRECT_HLS_URL).replace(/\/+$/, '') : '';
+  const hlsUrl = `${hlsBase}/hls/${encodeURIComponent(videoId)}/playlist.m3u8`;
   destroyActiveHls();
   els.player.removeAttribute('src');
   showError('');
   if (els.player.canPlayType('application/vnd.apple.mpegurl')) {
     els.player.src = hlsUrl;
-    els.player.load();
+    els.player.currentTime = Math.max(0, startSeconds);
+    els.player.play().catch(() => {});
     return;
   }
   if (window.Hls && window.Hls.isSupported()) {
@@ -1888,13 +1582,14 @@ function loadVideoSource(videoId, startSeconds = 0) {
     // Ban đầu chỉ tải đúng dải ~3 giây quanh frame mục tiêu (tiết kiệm tối đa băng thông SSH)
     activeHls = new window.Hls({
       startPosition: Math.max(0, targetStart - 1.0),
-      maxBufferLength: 3,             // Chỉ buffer 3 giây phía trước
+      maxBufferLength: 3,             // Chỉ buffer 3 giây phía trước để mở video tức thì
       maxMaxBufferLength: 5,          // Ngưỡng tối đa ban đầu 5 giây
       backBufferLength: 3,            // Chỉ giữ lại 3 giây phía sau
       maxBufferSize: 5 * 1024 * 1024, // Bộ đệm ban đầu tối đa 5MB
       enableWorker: true,
       lowLatencyMode: false,
     });
+    window.activeHls = activeHls;
 
     const initialWindowStart = Math.max(0, targetStart - 3.0);
     const initialWindowEnd = targetStart + 3.0;
@@ -1926,8 +1621,6 @@ function openResult(item) {
   const startSeconds = answerTimeMs(item) / 1000.0;
   let hasPlayed = false;
   state.activeVideoItem = item;
-  state.isInitialVideoLoad = true;
-  setVideoFrameTextVisible(false);
   els.modalTitle.textContent = `Video ${item.video_id} - cảnh ${item.shot_id}`;
   els.videoModal.hidden = false;
   renderActiveQuery();
@@ -1939,10 +1632,10 @@ function openResult(item) {
   renderTaskControls();
   renderVideoFrameStrip(item);
   renderTrakeTray();
+  window.setTimeout(() => centerActiveFrameInStrip(false), 100);
   refreshIcons(els.videoModal);
   updateVideoControls();
   const playVideo = () => {
-    state.isInitialVideoLoad = false;
     if (hasPlayed) return;
     hasPlayed = true;
     els.player.play().catch(() => {});
@@ -1959,17 +1652,12 @@ function openResult(item) {
   });
   els.player.addEventListener('seeked', function playOnce() {
     els.player.removeEventListener('seeked', playOnce);
-    state.isInitialVideoLoad = false;
-    updateVideoControls();
-    centerActiveFrameInStrip(false);
     playVideo();
   });
   loadVideoSource(item.video_id, startSeconds);
 }
 
 function closeVideo() {
-  state.isInitialVideoLoad = false;
-  setVideoFrameTextVisible(false);
   els.player.pause();
   closeVideoControlPopovers();
   destroyActiveHls();
@@ -2272,7 +1960,6 @@ async function openFrameOverview() {
   const timestampMs = Math.max(0, Math.round((Number(els.player.currentTime) || 0) * 1000));
   els.expandFrameContextBtn.disabled = true;
   els.frameOverviewTitle.textContent = `${activeItem.video_id} · đang tải 48 frame lân cận`;
-  els.frameOverviewGrid.classList.remove('is-video-gallery');
   els.frameOverviewGrid.innerHTML = '<div class="frame-overview-loading">Đang trích xuất frame…</div>';
   els.frameOverviewModal.hidden = false;
   try {
@@ -2280,9 +1967,9 @@ async function openFrameOverview() {
     const response = await fetch(`/frame-context/${encodeURIComponent(activeItem.video_id)}?${params}`);
     const payload = await response.json();
     if (!response.ok) throw new Error(payload.detail || 'Không tải được frame lân cận.');
-    state.frameOverviewFrames = payload.frames || [];
-    els.frameOverviewTitle.textContent = `${activeItem.video_id} · ${state.frameOverviewFrames.length} frame lân cận`;
-    els.frameOverviewGrid.innerHTML = state.frameOverviewFrames.map((frame, index) => {
+    state.activeFrameContextFrames = payload.frames || [];
+    els.frameOverviewTitle.textContent = `${activeItem.video_id} · ${state.activeFrameContextFrames.length} frame lân cận`;
+    els.frameOverviewGrid.innerHTML = state.activeFrameContextFrames.map((frame, index) => {
       const feedback = submissionFeedbackFor(frame);
       return `
       <article class="shot-overview-card frame-overview-card ${frame.is_current ? 'is-current' : ''}" data-frame-index="${index}">
@@ -2301,7 +1988,7 @@ async function openFrameOverview() {
       </article>`;
     }).join('');
     els.frameOverviewGrid.querySelectorAll('.frame-overview-card').forEach(card => {
-      const frame = state.frameOverviewFrames[Number(card.dataset.frameIndex)];
+      const frame = state.activeFrameContextFrames[Number(card.dataset.frameIndex)];
       card.addEventListener('click', () => {
         const seconds = Number.isFinite(frame.timestamp_seconds) ? frame.timestamp_seconds : (answerTimeMs(frame) / 1000.0);
         seekVideoToSeconds(seconds, false);
@@ -2329,105 +2016,10 @@ async function openFrameOverview() {
   }
 }
 
-async function openVideoFrameGallery(item) {
-  if (!item?.video_id) return;
-  const timestampMs = Math.max(0, Math.round(answerTimeMs(item) || 0));
-  els.frameOverviewTitle.textContent = `${item.video_id} · đang tải danh sách frame`;
-  els.frameOverviewGrid.classList.add('is-video-gallery');
-  els.frameOverviewGrid.innerHTML = '<div class="frame-overview-loading">Đang tải frame của toàn bộ video…</div>';
-  els.frameOverviewModal.hidden = false;
-  try {
-    const params = new URLSearchParams({timestamp_ms: String(timestampMs), count: '0'});
-    const response = await fetch(`/frame-context/${encodeURIComponent(item.video_id)}?${params}`);
-    const payload = await response.json();
-    if (!response.ok) throw new Error(payload.detail || 'Không tải được frame của video.');
-    const allFrames = Array.isArray(payload.frames) ? payload.frames : [];
-    state.frameOverviewFrames = allFrames;
-    let originIndex = allFrames.findIndex(frame => (
-      item.keyframe_id && String(frame.keyframe_id) === String(item.keyframe_id)
-    ));
-    if (originIndex < 0 && item.frame_id !== undefined && item.frame_id !== null) {
-      originIndex = allFrames.findIndex(frame => String(frame.frame_id) === String(item.frame_id));
-    }
-    if (originIndex < 0 && allFrames.length) {
-      originIndex = allFrames.reduce((nearestIndex, frame, index) => {
-        const frameTimeMs = Number.isFinite(Number(frame.timestamp_ms))
-          ? Number(frame.timestamp_ms)
-          : answerTimeMs(frame);
-        const nearestTimeMs = Number.isFinite(Number(allFrames[nearestIndex]?.timestamp_ms))
-          ? Number(allFrames[nearestIndex].timestamp_ms)
-          : answerTimeMs(allFrames[nearestIndex]);
-        return Math.abs(frameTimeMs - timestampMs) < Math.abs(nearestTimeMs - timestampMs)
-          ? index
-          : nearestIndex;
-      }, 0);
-    }
-    els.frameOverviewTitle.textContent = `${item.video_id} · ${state.frameOverviewFrames.length} frame`;
-    els.frameOverviewGrid.innerHTML = state.frameOverviewFrames.map((frame, index) => {
-      const seconds = Number.isFinite(Number(frame.timestamp_seconds))
-        ? Number(frame.timestamp_seconds)
-        : answerTimeMs(frame) / 1000;
-      const feedback = submissionFeedbackFor(frame);
-      return `
-        <article class="shot-overview-card frame-overview-card video-frame-gallery-card ${index === originIndex ? 'is-origin' : ''}" data-frame-index="${index}" title="Mở frame tại ${formatVideoTime(seconds)}">
-          <img src="/thumbnail/${encodeURIComponent(frame.keyframe_id)}" alt="${escapeHtml(frame.video_id)} tại ${formatVideoTime(seconds)}" loading="lazy" />
-          <div class="shot-overview-caption video-frame-gallery-caption">
-            <strong>${formatVideoTime(seconds)}</strong>
-            <span>Frame ${escapeHtml(frame.frame_id ?? frame.keyframe_id)}</span>
-          </div>
-          <div class="shot-overview-actions">
-            <button class="frame-hover-action" type="button" data-frame-action="add" title="Thêm vào khay" aria-label="Thêm frame ${escapeHtml(frame.frame_id ?? frame.keyframe_id)} vào khay">${addToTrayIcon()}</button>
-            <button class="frame-hover-action result-overlay-submit" type="button" data-frame-action="submit" title="Submit frame này" aria-label="Submit frame này">${submitIcon()}</button>
-          </div>
-          ${index === originIndex ? '<span class="current-frame-label origin-frame-label">Frame gốc</span>' : ''}
-          ${submissionFeedbackMarkup(feedback)}
-        </article>`;
-    }).join('') || '<div class="frame-overview-loading">Video này chưa có frame metadata.</div>';
-    els.frameOverviewGrid.querySelectorAll('.video-frame-gallery-card').forEach(card => {
-      const frame = state.frameOverviewFrames[Number(card.dataset.frameIndex)];
-      card.addEventListener('click', () => openFrameImage(frame));
-      card.querySelector('[data-frame-action="add"]')?.addEventListener('click', async event => {
-        event.stopPropagation();
-        if (await addKeyframeToTray(frame)) event.currentTarget.classList.add('is-added');
-      });
-      card.querySelector('[data-frame-action="submit"]')?.addEventListener('click', async event => {
-        event.stopPropagation();
-        await submit(frame);
-      });
-      card.querySelector('img')?.addEventListener('error', event => {
-        event.currentTarget.closest('.video-frame-gallery-card')?.classList.add('thumb-error');
-      });
-    });
-    refreshIcons(els.frameOverviewGrid);
-    window.requestAnimationFrame(() => {
-      const originCard = els.frameOverviewGrid.querySelector('.video-frame-gallery-card.is-origin');
-      if (!originCard) return;
-      const gridRect = els.frameOverviewGrid.getBoundingClientRect();
-      const cardRect = originCard.getBoundingClientRect();
-      const centeredTop = els.frameOverviewGrid.scrollTop
-        + (cardRect.top - gridRect.top)
-        - ((els.frameOverviewGrid.clientHeight - cardRect.height) / 2);
-      els.frameOverviewGrid.scrollTo({top: Math.max(0, centeredTop), behavior: 'auto'});
-    });
-  } catch (error) {
-    els.frameOverviewGrid.innerHTML = `<div class="frame-overview-loading is-error">${escapeHtml(error.message || String(error))}</div>`;
-  }
-}
-
 function closeFrameOverview() {
   els.frameOverviewModal.hidden = true;
-  els.frameOverviewGrid.classList.remove('is-video-gallery');
   els.frameOverviewGrid.innerHTML = '';
-  state.frameOverviewFrames = [];
-}
-
-function scrollFrameOverview(direction) {
-  const firstCard = els.frameOverviewGrid.querySelector('.video-frame-gallery-card');
-  const rowGap = Number.parseFloat(getComputedStyle(els.frameOverviewGrid).rowGap) || 0;
-  const rowHeight = firstCard
-    ? firstCard.getBoundingClientRect().height + rowGap
-    : els.frameOverviewGrid.clientHeight * 0.75;
-  els.frameOverviewGrid.scrollBy({top: direction * rowHeight, behavior: 'smooth'});
+  state.activeFrameContextFrames = [];
 }
 
 function setImageAddTrayState(isAdded) {
@@ -2458,296 +2050,15 @@ function keyframeInfoHtml(item, options = {}) {
   return details.join('');
 }
 
-const frameTextCache = new Map();
-let videoTextRequestVersion = 0;
-let videoAsrReturnTimer = 0;
-
-async function fetchFrameText(keyframeId) {
-  if (!keyframeId) return null;
-  const cached = frameTextCache.get(keyframeId);
-  if (cached) return cached;
-  try {
-    const res = await fetch(`/frame-text/${encodeURIComponent(keyframeId)}`);
-    if (!res.ok) return null;
-    const data = await res.json();
-    frameTextCache.set(keyframeId, data);
-    return data;
-  } catch (err) {
-    console.warn('Không lấy được frame-text:', err);
-    return null;
-  }
-}
-
-function renderFrameTextDetails(container, data, item, isLoading = false, options = {}) {
-  if (!container) return;
-  const showOcr = options.showOcr !== false;
-  const showAsr = options.showAsr !== false;
-  const ocrText = (data?.ocr_text ?? item?.ocr_text ?? '').trim();
-  const asrText = (data?.asr_text ?? item?.asr_text ?? '').trim();
-  const asrStart = data && Object.hasOwn(data, 'asr_start_ms') ? data.asr_start_ms : item?.asr_start_ms;
-  const asrEnd = data && Object.hasOwn(data, 'asr_end_ms') ? data.asr_end_ms : item?.asr_end_ms;
-  const hasAsrTime = asrStart !== null && asrStart !== undefined && asrEnd !== null && asrEnd !== undefined;
-  const asrTimeStr = hasAsrTime ? `[${formatVideoTime(Number(asrStart) / 1000)} – ${formatVideoTime(Number(asrEnd) / 1000)}]` : '';
-
-  const ocrEmptyText = isLoading ? 'Đang tải dữ liệu OCR...' : 'Không phát hiện chữ trong frame này';
-  const asrEmptyText = isLoading ? 'Đang tải dữ liệu ASR...' : 'Không có lời thoại tại đoạn này';
-
-  const ocrHtml = `
-    <div class="frame-text-card ocr-card">
-      <div class="frame-text-card-head">
-        <div class="frame-text-badge-wrap">
-          <span class="frame-text-badge ocr-badge"><i data-lucide="scan-text"></i> OCR TEXT</span>
-        </div>
-        ${ocrText ? `<button class="text-copy-btn" type="button" data-copy-text="${escapeHtml(ocrText)}"><i data-lucide="copy"></i> Copy</button>` : ''}
-      </div>
-      <div class="frame-text-content ${ocrText ? '' : 'frame-text-empty'}">
-        ${ocrText ? escapeHtml(ocrText) : ocrEmptyText}
-      </div>
-    </div>
-  `;
-
-  const asrHtml = `
-    <div class="frame-text-card asr-card">
-      <div class="frame-text-card-head">
-        <div class="frame-text-badge-wrap">
-          <span class="frame-text-badge asr-badge"><i data-lucide="mic"></i> ASR LỜI THOẠI</span>
-          ${asrTimeStr ? `<span class="frame-text-time">${escapeHtml(asrTimeStr)}</span>` : ''}
-        </div>
-        ${asrText ? `<button class="text-copy-btn" type="button" data-copy-text="${escapeHtml(asrText)}"><i data-lucide="copy"></i> Copy</button>` : ''}
-      </div>
-      <div class="frame-text-content ${asrText ? '' : 'frame-text-empty'}">
-        ${asrText ? escapeHtml(asrText) : asrEmptyText}
-      </div>
-    </div>
-  `;
-
-  container.innerHTML = `${showOcr ? ocrHtml : ''}${showAsr ? asrHtml : ''}`;
-  container.querySelectorAll('.text-copy-btn').forEach(btn => {
-    btn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      const text = btn.getAttribute('data-copy-text');
-      if (text) {
-        navigator.clipboard.writeText(text).then(() => {
-          const originalHtml = btn.innerHTML;
-          btn.classList.add('copied');
-          btn.innerHTML = '<i data-lucide="check"></i> Đã chép!';
-          refreshIcons(btn);
-          setTimeout(() => {
-            btn.classList.remove('copied');
-            btn.innerHTML = originalHtml;
-            refreshIcons(btn);
-          }, 1500);
-        }).catch(() => {});
-      }
-    });
-  });
-  refreshIcons(container);
-}
-
-function videoFrameItemFromThumb(thumb) {
-  if (!thumb || !state.activeVideoItem) return null;
-  const keyframeId = thumb.dataset.keyframeId || '';
-  const candidates = [
-    ...state.activeFrameContextFrames,
-    ...state.activeShotContextFrames,
-    ...uniqueVideoFrames(state.activeVideoItem.video_id, state.activeVideoItem)
-  ];
-  const match = candidates.find(frame => frame?.keyframe_id === keyframeId);
-  if (match) return match;
-  const seconds = Number(thumb.dataset.seconds) || 0;
-  return {
-    ...state.activeVideoItem,
-    keyframe_id: keyframeId || state.activeVideoItem.keyframe_id,
-    frame_id: thumb.dataset.frameId || state.activeVideoItem.frame_id,
-    timestamp_seconds: seconds,
-    timestamp_ms: Math.round(seconds * 1000)
-  };
-}
-
-function updateVideoAsrFrameLabel(item) {
-  if (!item || !els.videoFrameTextLabel) return;
-  const currentSeconds = Math.max(0, Number(els.player.currentTime) || 0);
-  const fps = fpsForVideo(state.activeVideoItem?.video_id || item.video_id);
-  const displayedFrameId = Number.isFinite(fps) && fps > 0
-    ? Math.max(0, Math.floor(currentSeconds * fps + 1e-6))
-    : item.frame_id;
-  els.videoFrameTextLabel.textContent = `Frame ${displayedFrameId} · ${formatVideoTime(currentSeconds)}`;
-}
-
-function centerCurrentVideoAsr(behavior = 'smooth') {
-  if (!els.videoFrameTextDetails) return;
-  const activeSegment = els.videoFrameTextDetails.querySelector('.video-asr-segment.is-current');
-  activeSegment?.scrollIntoView({block: 'center', inline: 'nearest', behavior});
-}
-
-function scheduleVideoAsrReturn() {
-  window.clearTimeout(videoAsrReturnTimer);
-  videoAsrReturnTimer = window.setTimeout(() => {
-    if (state.showVideoFrameText) centerCurrentVideoAsr('smooth');
-  }, 1200);
-}
-
-function updateVideoAsrHighlight(item) {
-  if (!state.showVideoFrameText || !els.videoFrameTextDetails) return;
-  updateVideoAsrFrameLabel(item);
-  const currentMs = Math.round(Math.max(0, Number(els.player.currentTime) || 0) * 1000);
-  let activeEntry = null;
-  state.activeVideoAsrEntries.forEach(entry => {
-    if (currentMs >= entry.startMs && currentMs <= entry.endMs) {
-      if (!activeEntry || (entry.endMs - entry.startMs) < (activeEntry.endMs - activeEntry.startMs)) {
-        activeEntry = entry;
-      }
-    }
-  });
-  const highlightKey = activeEntry?.key || '';
-  els.videoFrameTextDetails.querySelectorAll('.video-asr-segment').forEach(segment => {
-    segment.classList.toggle('is-current', segment.dataset.asrKey === highlightKey);
-  });
-  if (highlightKey && highlightKey !== state.activeVideoAsrHighlightKey) {
-    centerCurrentVideoAsr(els.player.paused ? 'auto' : 'smooth');
-  }
-  state.activeVideoAsrHighlightKey = highlightKey;
-}
-
-function renderVideoAsrTranscript(item, isLoading = false) {
-  if (!item || !els.videoFrameTextDetails) return;
-  updateVideoAsrFrameLabel(item);
-
-  if (isLoading && state.activeVideoAsrEntries.length === 0) {
-    els.videoFrameTextDetails.innerHTML = '<div class="video-asr-empty">Đang tải toàn bộ lời thoại của video...</div>';
-    return;
-  }
-
-  if (state.activeVideoAsrEntries.length === 0) {
-    els.videoFrameTextDetails.innerHTML = '<div class="video-asr-empty">Video này không có lời thoại ASR.</div>';
-    return;
-  }
-
-  els.videoFrameTextDetails.innerHTML = `
-    <div class="video-asr-transcript" aria-label="Toàn bộ lời thoại ASR của video">
-      ${state.activeVideoAsrEntries.map(entry => `
-        <button class="video-asr-segment" type="button" data-asr-key="${escapeHtml(entry.key)}" data-asr-start="${entry.startMs}" title="Phát từ ${formatVideoTime(entry.startMs / 1000)}">
-          <span>${escapeHtml(entry.text)}</span>
-        </button>`).join(' ')}
-    </div>`;
-  els.videoFrameTextDetails.querySelectorAll('.video-asr-segment').forEach(segment => {
-    segment.addEventListener('click', event => {
-      event.stopPropagation();
-      seekVideoToSeconds(Number(segment.dataset.asrStart) / 1000, true);
-    });
-  });
-  const transcript = els.videoFrameTextDetails.querySelector('.video-asr-transcript');
-  transcript?.addEventListener('scroll', scheduleVideoAsrReturn, {passive: true});
-  transcript?.addEventListener('wheel', scheduleVideoAsrReturn, {passive: true});
-  transcript?.addEventListener('pointerup', scheduleVideoAsrReturn);
-  transcript?.addEventListener('touchend', scheduleVideoAsrReturn, {passive: true});
-  updateVideoAsrHighlight(item);
-}
-
-async function loadVideoAsrContext(item, force = false) {
-  const currentContext = state.activeVideoAsrContext;
-  if (!force && currentContext?.videoId === item.video_id) {
-    updateVideoAsrHighlight(item);
-    return;
-  }
-
-  const requestVersion = ++videoTextRequestVersion;
-  renderVideoAsrTranscript(item, true);
-  const response = await fetch(`/video-asr/${encodeURIComponent(item.video_id)}`);
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(payload.detail || `HTTP ${response.status}`);
-  if (requestVersion !== videoTextRequestVersion || !state.showVideoFrameText) return;
-
-  state.activeVideoAsrEntries = (Array.isArray(payload.segments) ? payload.segments : [])
-    .map(segment => {
-      const text = String(segment.text_raw || '').trim();
-      const startMs = Number(segment.start_ms);
-      const endMs = Number(segment.end_ms);
-      return {
-        key: `${segment.segment_id}:${startMs}:${endMs}`,
-        text,
-        startMs,
-        endMs
-      };
-    })
-    .filter(entry => entry.text && Number.isFinite(entry.startMs) && Number.isFinite(entry.endMs))
-    .sort((left, right) => left.startMs - right.startMs || left.endMs - right.endMs);
-  state.activeVideoAsrContext = {
-    videoId: item.video_id,
-    segmentCount: state.activeVideoAsrEntries.length
-  };
-  state.activeVideoAsrHighlightKey = '';
-  renderVideoAsrTranscript(item, false);
-}
-
-async function updateVideoFrameText(activeThumb = null, force = false) {
-  if (!state.showVideoFrameText || !els.videoFrameTextPanel || els.videoModal.hidden) return;
-  const thumb = activeThumb || els.videoFrameStrip?.querySelector('.video-frame-thumb.is-active');
-  const item = videoFrameItemFromThumb(thumb);
-  if (!item?.keyframe_id) {
-    els.videoFrameTextLabel.textContent = 'Chưa xác định frame';
-    els.videoFrameTextDetails.innerHTML = '';
-    return;
-  }
-  const keyframeChanged = state.activeVideoTextKeyframeId !== item.keyframe_id;
-  state.activeVideoTextKeyframeId = item.keyframe_id;
-  state.activeVideoTextItem = item;
-  updateVideoAsrHighlight(item);
-  if (force || keyframeChanged || !state.activeVideoAsrContext) {
-    loadVideoAsrContext(item, force).catch(error => {
-      if (state.showVideoFrameText) {
-        els.videoFrameTextDetails.innerHTML = `<div class="video-asr-empty">Không tải được ASR: ${escapeHtml(error.message || String(error))}</div>`;
-      }
-    });
-  }
-}
-
-function syncVideoAsrPanelHeight() {
-  if (!els.videoShell || !els.videoFrameTextPanel || els.videoFrameTextPanel.hidden) return;
-  const videoHeight = Math.round(els.videoShell.getBoundingClientRect().height);
-  if (videoHeight > 0) els.videoFrameTextPanel.style.height = `${videoHeight}px`;
-}
-
-function setVideoFrameTextVisible(visible) {
-  window.clearTimeout(videoAsrReturnTimer);
-  state.showVideoFrameText = Boolean(visible);
-  state.activeVideoTextKeyframeId = '';
-  state.activeVideoTextItem = null;
-  state.activeVideoAsrEntries = [];
-  state.activeVideoAsrContext = null;
-  state.activeVideoAsrHighlightKey = '';
-  videoTextRequestVersion += 1;
-  els.videoTextToggleBtn.setAttribute('aria-pressed', String(state.showVideoFrameText));
-  els.videoTextToggleBtn.classList.toggle('is-active', state.showVideoFrameText);
-  els.videoFrameTextPanel.hidden = !state.showVideoFrameText;
-  if (state.showVideoFrameText) {
-    window.requestAnimationFrame(() => {
-      syncVideoAsrPanelHeight();
-      window.requestAnimationFrame(syncVideoAsrPanelHeight);
-    });
-    updateVideoFrameText(null, true);
-  } else {
-    els.videoFrameTextPanel.style.removeProperty('height');
-    els.videoFrameTextDetails.innerHTML = '';
-  }
-}
-
 function openFrameImage(item) {
   state.imageItem = item;
   els.imageTitle.textContent = `Frame ${item.video_id} - cảnh ${item.shot_id}`;
   els.imagePreview.src = item.image_url || `/keyframe/${item.keyframe_id}`;
   els.imagePreview.alt = `${item.video_id} cảnh ${item.shot_id}`;
-  els.imageMeta.innerHTML = keyframeInfoHtml(item);
+  els.imageMeta.innerHTML = keyframeInfoHtml(item)
+    + (item.ocr_text ? `<span class="keyframe-info-wide"><strong>OCR</strong> ${escapeHtml(item.ocr_text)}</span>` : '')
+    + (item.asr_text ? `<span class="keyframe-info-wide"><strong>ASR</strong> ${escapeHtml(item.asr_text)} (${formatVideoTime(Number(item.asr_start_ms || 0) / 1000)}–${formatVideoTime(Number(item.asr_end_ms || 0) / 1000)})</span>` : '');
   setImageAddTrayState(isKeyframeInTray(item));
-  if (els.imageTextDetails) {
-    const hasExistingText = item.ocr_text || item.asr_text;
-    renderFrameTextDetails(els.imageTextDetails, null, item, !hasExistingText);
-    fetchFrameText(item.keyframe_id).then(data => {
-      if (state.imageItem?.keyframe_id === item.keyframe_id) {
-        renderFrameTextDetails(els.imageTextDetails, data, item, false);
-      }
-    });
-  }
   els.imageModal.hidden = false;
 }
 
@@ -2755,7 +2066,6 @@ function closeFrameImage() {
   els.imagePreview.removeAttribute('src');
   els.imagePreview.removeAttribute('alt');
   els.imageMeta.innerHTML = '';
-  if (els.imageTextDetails) els.imageTextDetails.innerHTML = '';
   state.imageItem = null;
   els.imageModal.hidden = true;
 }
@@ -2843,7 +2153,7 @@ function renderResults() {
   els.results.innerHTML = '';
   els.results.classList.remove('temporal-results');
   els.results.classList.toggle('multi-results', state.searchMode === 'multi');
-  (state.searchMode === 'multi' ? sortResults(state.results) : state.results).forEach((item, index) => {
+  sortResults(state.results).forEach((item, index) => {
     const canSubmit = Boolean(
       (state.submissionMode === 'csv' && activeQuery())
       || (state.submissionMode === 'dres' && state.dresSessionId && state.dresSelectedEvaluationId)
@@ -2877,7 +2187,6 @@ function renderResults() {
           </button>`}
         <div class="result-overlay-actions">
           <button data-card-action="open" type="button" title="Mở video tại thời điểm này" aria-label="Mở video tại thời điểm này">${openVideoIcon()}</button>
-          <button data-card-action="frames" type="button" title="Xem frame của toàn bộ video" aria-label="Xem frame của toàn bộ video">${framesGalleryIcon()}</button>
           <button data-card-action="select" type="button" title="Thêm frame vào khay chọn" aria-label="Thêm frame vào khay chọn">${addToTrayIcon()}</button>
           ${canSubmit ? `<button class="result-overlay-submit" data-card-action="submit" type="button" title="Submit frame này" aria-label="Submit frame này">${submitIcon()}</button>` : ''}
         </div>
@@ -2893,7 +2202,6 @@ function renderResults() {
     });
     const thumb = card.querySelector('.thumb-frame');
     const openBtn = card.querySelector('[data-card-action="open"]');
-    const framesBtn = card.querySelector('[data-card-action="frames"]');
     const selectBtn = card.querySelector('[data-card-action="select"]');
     const submitBtn = card.querySelector('[data-card-action="submit"]');
     card.addEventListener('dragstart', event => {
@@ -2911,10 +2219,6 @@ function renderResults() {
     openBtn.addEventListener('click', event => {
       event.stopPropagation();
       openResult(item);
-    });
-    framesBtn.addEventListener('click', event => {
-      event.stopPropagation();
-      openVideoFrameGallery(item);
     });
     selectBtn.addEventListener('click', event => {
       event.stopPropagation();
@@ -3016,7 +2320,6 @@ function renderSelection() {
       <button class="selected-frame-remove" type="button" title="Xóa frame khỏi khay chung" aria-label="Xóa frame khỏi khay chung">&times;</button>
       <div class="selected-frame-actions">
         <button class="selected-frame-open-video" type="button" title="Xem video" aria-label="Xem video">${openVideoIcon()}</button>
-        <button class="selected-frame-open-gallery" type="button" title="Xem toàn bộ frame của video" aria-label="Xem toàn bộ frame của video">${framesGalleryIcon()}</button>
         <button class="selected-frame-zoom" type="button" title="Phóng to và xem thông tin" aria-label="Phóng to frame">${zoomIcon()}</button>
         <button class="selected-frame-submit" type="button" title="Submit frame này" aria-label="Submit frame này">${submitIcon()}</button>
       </div>
@@ -3025,10 +2328,6 @@ function renderSelection() {
     frame.querySelector('.selected-frame-open-video').addEventListener('click', event => {
       event.stopPropagation();
       openResult(item);
-    });
-    frame.querySelector('.selected-frame-open-gallery').addEventListener('click', event => {
-      event.stopPropagation();
-      openVideoFrameGallery(item);
     });
     frame.querySelector('.selected-frame-zoom').addEventListener('click', event => {
       event.stopPropagation();
@@ -4166,7 +3465,8 @@ function fuseMultiQueryResults(payloads, queries, topK) {
 }
 
 async function performSearch(requestedTemporalStageIndex = null, translatedQueryOverride = '') {
-  const originalQueries = collectQueries();
+  if (state.isSearching) return;
+  const queries = collectQueries();
   const ocrQueries = collectOcrQueries();
   const asrQueries = collectAsrQueries();
   const temporal = state.stages.length > 1;
@@ -4178,28 +3478,7 @@ async function performSearch(requestedTemporalStageIndex = null, translatedQuery
     showError('Hãy sửa Query A, B hoặc C rồi bấm nút tìm lại của stage đó.');
     return;
   }
-  if (state.embeddingModel === 'beit3' && !translatedQueryOverride) {
-    const indexesToTranslate = temporal
-      ? [temporalStageIndex]
-      : originalQueries.map((_, index) => index);
-    try {
-      for (const index of indexesToTranslate) {
-        const source = originalQueries[index] || '';
-        const stage = state.stages[index];
-        if (!stage || !looksLikeVietnameseQuery(source) || stage.translatedQuery) continue;
-        showError('');
-        setStatus(`Đang dịch Query ${stageLetter(index)} sang tiếng Anh cho BEiT-3…`, 'searching');
-        const {translation} = await requestEnglishTranslation(source);
-        showStageTranslation(stage, translation);
-      }
-    } catch (error) {
-      showError(`BEiT-3 cần query tiếng Anh nhưng dịch tự động thất bại: ${error.message || error}`);
-      setStatus('Dịch tự động thất bại', 'error');
-      return;
-    }
-  }
-  const queries = originalQueries.map((query, index) => state.stages[index]?.translatedQuery || query);
-  const temporalOriginalQuery = temporal ? (originalQueries[temporalStageIndex] || '') : '';
+  const temporalOriginalQuery = temporal ? (queries[temporalStageIndex] || '') : '';
   const temporalQuery = temporal ? (translatedQueryOverride || state.stages[temporalStageIndex]?.translatedQuery || temporalOriginalQuery) : '';
   const temporalOcrQuery = temporal ? (ocrQueries[temporalStageIndex] || '') : '';
   const temporalAsrQuery = temporal ? (asrQueries[temporalStageIndex] || '') : '';
@@ -4217,7 +3496,6 @@ async function performSearch(requestedTemporalStageIndex = null, translatedQuery
     && ((!query && !ocrQuery && !asrQuery) || state.queryMode === 'similarity');
   const videoFilter = collectVideoFilter();
   const top_k = searchTopK();
-  const requestTopK = !temporal && !multi ? top_k * 3 : top_k;
   const invalidMultiQuery = multi && (
     queries.length < 2
     || queries.length > 5
@@ -4237,6 +3515,7 @@ async function performSearch(requestedTemporalStageIndex = null, translatedQuery
   }
   showError('');
   setStatus('Đang tìm', 'searching');
+  state.isSearching = true;
   try {
     await clearCorrectSubmissionFeedback();
     const clientStarted = performance.now();
@@ -4257,6 +3536,7 @@ async function performSearch(requestedTemporalStageIndex = null, translatedQuery
           ocr_query: temporalOcrQuery,
           asr_query: temporalAsrQuery,
           embedding_model: state.embeddingModel,
+          ocr_model: state.ocrModel,
           search_mode: temporalOcrQuery || temporalAsrQuery ? 'hybrid' : 'visual',
           ...temporalWeights,
           stage: temporalStageIndex + 1,
@@ -4267,14 +3547,14 @@ async function performSearch(requestedTemporalStageIndex = null, translatedQuery
           query: state.similarityQuery.trim(),
           image_weight: (100 - state.similarityTextWeight) / 100,
           text_weight: state.similarityTextWeight / 100,
-          top_k: requestTopK,
+          top_k,
           video_id: videoFilter || undefined,
           search_mode: 'similarity',
           embedding_model: state.embeddingModel
         } : asrOnly && !multi ? {
           query: '',
           asr_query: asrQuery,
-          top_k: requestTopK,
+          top_k,
           video_id: videoFilter || undefined,
           search_mode: 'hybrid',
           embedding_model: state.embeddingModel,
@@ -4287,9 +3567,9 @@ async function performSearch(requestedTemporalStageIndex = null, translatedQuery
           ocr_query: multi ? undefined : ocrQuery,
           asr_query: multi ? undefined : asrQuery,
           queries: multi ? queries : undefined,
-          top_k: requestTopK,
-          video_id: videoFilter || undefined,
-          search_mode: 'hybrid',
+          top_k,
+          video_id: videoFilter || null,
+          search_mode: (ocrQuery || asrQuery) ? 'hybrid' : 'visual',
           embedding_model: state.embeddingModel,
           ocr_model: state.ocrModel,
           ...fusionWeightsForStage(state.stages[0], {
@@ -4390,11 +3670,7 @@ async function performSearch(requestedTemporalStageIndex = null, translatedQuery
           };
         })
       : (payload.results || []).map(item => ({...item, stage: 1}));
-    const filteredResults = applyVideoFilter(backendResults, videoFilter);
-    state.results = temporal
-      ? filteredResults.slice(0, 200)
-      : multi ? filteredResults.slice(0, top_k)
-      : groupShotSuggestions(filteredResults, top_k);
+    state.results = applyVideoFilter(backendResults, videoFilter).slice(0, temporal ? 200 : top_k);
     const renderStarted = performance.now();
     renderStages();
     syncSearchModeControls();
@@ -4454,13 +3730,15 @@ async function performSearch(requestedTemporalStageIndex = null, translatedQuery
       : `Hình ảnh ${Math.round(Number(requestBody.metaclip_weight) * 100)}% · Text OCR ${Math.round(Number(requestBody.ocr_weight) * 100)}% · ASR ${Math.round(Number(requestBody.asr_weight || 0) * 100)}%${ocrQuery ? ` · OCR “${ocrQuery}”` : ''}${asrQuery ? ` · ASR “${asrQuery}”` : ''}`;
     const temporalMeta = temporal ? `Temporal ${payload.stage_count || queries.length} hành động · ` : '';
     const anchorMeta = temporal && payload.anchor_stage ? `anchor H${payload.anchor_stage} · ` : '';
-    const ocrModelLabel = state.ocrModel === 'monkey' ? 'MonkeyOCRv2' : 'PP-OCRv6';
+    const ocrModelLabel = 'OCR Union (Monkey + PP)';
     els.searchMeta.textContent = `${modelLabel} · ${ocrModelLabel} · ${temporalMeta}${anchorMeta}${backendMethodLabel(payload.search_backend)} · ${weightMeta}${filterMeta}`;
     els.results.scrollTo({top: 0, left: 0, behavior: 'smooth'});
     setStatus('Đã kết nối', 'ok');
   } catch (error) {
     showError(error.message || String(error));
     setStatus('Mất kết nối', 'error');
+  } finally {
+    state.isSearching = false;
   }
 }
 
@@ -4494,12 +3772,13 @@ function resetWorkspace() {
   renderStages();
   syncSearchModeControls();
   syncEmbeddingModelControls();
+  syncOcrModelControls();
   if (els.videoFilter) els.videoFilter.value = '';
   syncFusionWeights();
   renderResults();
   renderSelection();
   showError('');
-  els.searchMeta.textContent = 'Chưa tìm kiếm';
+  els.searchMeta.textContent = 'Chưa tìm kiếm · OCR Union (Monkey + PP)';
   setStatus(state.backend ? 'Đã kết nối' : 'Sẵn sàng.', state.backend ? 'ok' : 'neutral');
 }
 
@@ -4574,6 +3853,11 @@ els.embeddingModelToggle.addEventListener('click', async () => {
   }
   syncEmbeddingModelControls();
 });
+if (els.ocrModelToggle) {
+  els.ocrModelToggle.addEventListener('click', () => {
+    setLog('Hệ thống đang chạy chế độ Hợp nhất OCR: MonkeyOCR v2 + PP-OCRv6 (Recall tối đa).');
+  });
+}
 
 els.stageList.addEventListener('keydown', event => {
   if (event.target.matches('.text-query, .similarity-query, .stage-asr-query') && event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
@@ -4729,14 +4013,6 @@ els.videoSubmitCurrentBtn.addEventListener('click', () => {
   const item = getDisplayedVideoFrameItem();
   if (item) submit(item);
 });
-els.videoTextToggleBtn.addEventListener('click', () => {
-  setVideoFrameTextVisible(!state.showVideoFrameText);
-});
-if (window.ResizeObserver && els.videoShell) {
-  const videoAsrSizeObserver = new ResizeObserver(syncVideoAsrPanelHeight);
-  videoAsrSizeObserver.observe(els.videoShell);
-}
-window.addEventListener('resize', syncVideoAsrPanelHeight);
 els.videoBackBtn.addEventListener('click', () => seekVideoToSeconds((els.player.currentTime || 0) - 5, true));
 els.videoPlayBtn.addEventListener('click', () => {
   if (els.player.paused) {
@@ -4766,8 +4042,6 @@ els.videoProgress.addEventListener('input', () => {
   const duration = Number.isFinite(els.player.duration) ? els.player.duration : 0;
   if (duration <= 0) return;
   els.player.currentTime = (Number(els.videoProgress.value) / 1000) * duration;
-  updateVideoControls();
-  centerActiveFrameInStrip(false);
 });
 els.videoSpeedBtn.addEventListener('click', () => {
   toggleVideoControlPopover(els.videoSpeedMenu, els.videoSpeedBtn);
@@ -4792,20 +4066,9 @@ els.videoFullscreenBtn.addEventListener('click', () => {
 });
 els.player.addEventListener('loadedmetadata', updateVideoControls);
 els.player.addEventListener('timeupdate', updateVideoControls);
-els.player.addEventListener('seeking', updateVideoControls);
-els.player.addEventListener('seeked', updateVideoControls);
 els.player.addEventListener('play', updateVideoControls);
 els.player.addEventListener('pause', updateVideoControls);
 els.player.addEventListener('volumechange', updateVideoControls);
-
-// Mouse Wheel & Trackpad scrubbing on video and filmstrip
-if (els.videoShell) {
-  els.videoShell.addEventListener('wheel', handleVideoScrubWheel, { passive: false });
-}
-if (els.videoFrameStrip) {
-  els.videoFrameStrip.addEventListener('wheel', handleVideoScrubWheel, { passive: false });
-}
-setupFilmstripScrubbing();
 document.addEventListener('keydown', event => {
   const inInput = event.target.matches('input, textarea');
   const key = event.key.toLowerCase();
@@ -4849,18 +4112,6 @@ document.addEventListener('keydown', event => {
   }
 
   if (inInput) return;
-
-  if (
-    !els.frameOverviewModal.hidden
-    && els.imageModal.hidden
-    && els.frameOverviewGrid.classList.contains('is-video-gallery')
-    && ['ArrowUp', 'ArrowDown'].includes(event.key)
-  ) {
-    event.preventDefault();
-    event.stopPropagation();
-    scrollFrameOverview(event.key === 'ArrowUp' ? -1 : 1);
-    return;
-  }
 
   // Single-key shortcuts when NOT typing in text inputs
   if (key === '1') {
@@ -4983,6 +4234,7 @@ document.addEventListener('keydown', event => {
 renderStages();
 syncSearchModeControls();
 syncEmbeddingModelControls();
+syncOcrModelControls();
 syncFusionWeights();
 renderResults();
 renderSelection();

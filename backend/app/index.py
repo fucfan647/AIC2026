@@ -160,32 +160,25 @@ class TorchGpuIndex:
 class MetadataStore:
     def __init__(self, sqlite_path: Path, video_ranges_path: Path):
         self.sqlite_path = sqlite_path
-        self.conn = sqlite3.connect(f"file:{sqlite_path}?mode=ro", uri=True, check_same_thread=False)
-        self.conn.row_factory = sqlite3.Row
+        conn = sqlite3.connect(f"file:{sqlite_path}?mode=ro", uri=True)
+        cur = conn.cursor()
+        cur.execute("SELECT row_id, keyframe_id, video_id, shot_id, timestamp_ms, image_file FROM records ORDER BY row_id ASC")
+        cols = [d[0] for d in cur.description]
+        self.records = [dict(zip(cols, r)) for r in cur.fetchall()]
+        conn.close()
+        self.keyframe_rows = {str(rec["keyframe_id"]): i for i, rec in enumerate(self.records)}
         self.video_ranges = json.loads(video_ranges_path.read_text(encoding="utf-8")) if video_ranges_path.is_file() else {}
 
     def get_by_keyframe_id(self, keyframe_id: str) -> dict | None:
-        row = self.conn.execute(
-            "SELECT * FROM records WHERE keyframe_id = ?",
-            (str(keyframe_id),),
-        ).fetchone()
-        return None if row is None else dict(row)
+        row_id = self.keyframe_rows.get(str(keyframe_id))
+        return None if row_id is None else self.records[row_id]
 
     def get_rows(self, row_ids: list[int]) -> dict[int, dict]:
-        if not row_ids:
-            return {}
-        found: dict[int, dict] = {}
-        for start in range(0, len(row_ids), 900):
-            chunk = [int(value) for value in row_ids[start : start + 900]]
-            placeholders = ",".join("?" for _ in chunk)
-            rows = self.conn.execute(
-                f"SELECT * FROM records WHERE row_id IN ({placeholders})",
-                chunk,
-            ).fetchall()
-            for row in rows:
-                item = dict(row)
-                found[int(item["row_id"])] = item
-        return found
+        return {
+            row_id: self.records[row_id]
+            for value in row_ids
+            if 0 <= (row_id := int(value)) < len(self.records)
+        }
 
     def get_adjacent(self, row_id: int, video_id: str) -> dict:
         rows = self.get_rows([int(row_id) - 1, int(row_id) + 1])
@@ -228,7 +221,7 @@ class RetrievalState:
         self.config_path = config_path
         self.config = json.loads(config_path.read_text(encoding="utf-8"))
         self.storage_backend = "npy"
-        self.metadata_backend = "sqlite"
+        self.metadata_backend = "ram"
         self.milvus_collection = None
         self.milvus_version = None
         self.milvus_load_seconds = None
