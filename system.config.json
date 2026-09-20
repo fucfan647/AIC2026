@@ -52,7 +52,7 @@
     "temporal_local_top_k": 200,
     "temporal_stage2_keep_k": 200,
     "temporal_output_top_k": 200,
-    "temporal_window_ms": 300000,
+    "temporal_window_ms": 60000,
     "temporal_session_ttl_seconds": 1800,
     "temporal_max_sessions": 64
   },

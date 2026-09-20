@@ -44,7 +44,7 @@ class TemporalSearchService:
         local_top_k: int = 200,
         stage2_keep_k: int = 200,
         output_top_k: int = 200,
-        window_ms: int = 300_000,
+        window_ms: int = 60_000,
         session_ttl_seconds: int = 1_800,
         max_sessions: int = 64,
     ):
