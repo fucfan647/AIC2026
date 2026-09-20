@@ -13,16 +13,16 @@ echo =====================================================================
 
 :: 1. CẤU HÌNH ĐƯỜNG DẪN ẢNH SSD TRÊN MÁY BẠN
 :: Thay đổi đường dẫn tới thư mục keyframe trên SSD của bạn:
-set "KEYFRAMES_DIR=C:\uit\aic2026_resources\synthetic_frames\synthetic_frames"
-set "RECORDS_PATH=C:\uit\aic2026_resources\aic_resource\01_records_db\backend\artifacts\current_index\records.sqlite"
-set "ASR_INDEX=C:\uit\aic2026_resources\aic_resource\10_asr_index\backend\artifacts\asr_index\asr.sqlite"
+set "KEYFRAMES_DIR=F:\AI\AIC2026\data\synthetic_frames"
+set "RECORDS_PATH=F:\AI\AIC2026\system\backend\artifacts\current_index\records.sqlite"
+set "ASR_INDEX=F:\AI\AIC2026\system\backend\artifacts\asr_index\asr.sqlite"
 
 :: 2. ĐỊA CHỈ SERVER LINUX (Vừa làm Team Hub cổng 8080, vừa làm GPU AI cổng 8036)
 :: Thay <IP_SERVER_LINUX> bằng IP thực tế của Server (ví dụ: 192.168.1.50):
 set "SERVER_IP=192.168.20.156"
 
 set "TEAM_HUB_URL=http://192.168.20.156:8080"
-set "BACKEND_URL=http://192.168.20.156:8080"
+set "BACKEND_URL=http://127.0.0.1:8036/"
 set "HLS_SERVER_URL=http://192.168.20.156:8080"
 set "TRANSLATOR_URL=http://127.0.0.1:8031"
 

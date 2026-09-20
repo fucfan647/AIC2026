@@ -12,18 +12,18 @@ echo =====================================================================
 
 :: 1. CẤU HÌNH ĐƯỜNG DẪN ẢNH SSD TRÊN MÁY BẠN
 :: Thay đổi đường dẫn tới thư mục ảnh synthetic_frames_webp trên SSD của bạn:
-set "KEYFRAMES_DIR=D:\keyframes_AIC_2026"
+set "KEYFRAMES_DIR=F:\AI\AIC2026\data\synthetic_frames"
 
 :: 2. ĐỊA CHỈ MÁY ĐỘI TRƯỞNG (Team Hub)
 :: Thay <IP_MAY_DOI_TRUONG> bằng IP máy Đội trưởng trong mạng LAN (ví dụ: 192.168.1.15):
-set "TEAM_HUB_URL=http://127.0.0.1:8080"
+set "TEAM_HUB_URL=http://%SERVER_IP%:8080"
 
 :: 3. ĐỊA CHỈ SERVER GPU (Chạy AI Search)
 :: Thay <IP_SERVER_GPU> bằng IP của Server AI (ví dụ: 192.168.1.50):
-set "BACKEND_URL=http://127.0.0.1:8036"
+set "BACKEND_URL=http://%SERVER_IP%:8080"
 
 :: 4. HLS SERVER (Nếu có stream video)
-set "HLS_SERVER_URL=http://127.0.0.1:8052"
+set "HLS_SERVER_URL=http://%SERVER_IP%:8080"
 
 echo.
 echo [1/3] Kiểm tra Python...
