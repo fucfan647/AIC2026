@@ -24,7 +24,7 @@ set "SERVER_IP=192.168.20.156"
 set "TEAM_HUB_URL=http://192.168.20.156:8080"
 set "BACKEND_URL=http://192.168.20.156:8080"
 set "HLS_SERVER_URL=http://192.168.20.156:8080"
-set "TRANSLATOR_URL=http://127.0.0.1:8031"
+set "TRANSLATOR_URL=http://127.0.0.1:8032"
 
 echo.
 echo [1/3] Kiểm tra Python...
