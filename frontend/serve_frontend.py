@@ -99,6 +99,7 @@ def empty_team_state() -> Dict[str, Any]:
         "members": {},
         "votes": [],
         "trake_frames": [],
+        "trake_users": {},
         "submission_feedback": {},
         "active_query": "",
         "submission_counts": {},
@@ -477,6 +478,7 @@ def read_team_state(path: Path = TEAM_STATE_PATH) -> Dict[str, Any]:
     state.setdefault("members", {})
     state.setdefault("votes", [])
     state.setdefault("trake_frames", [])
+    state.setdefault("trake_users", {})
     state.setdefault("submission_feedback", {})
     state.setdefault("active_query", "")
     state.setdefault("submission_counts", {})
@@ -1908,6 +1910,113 @@ def create_app(
             state["trake_frames"] = []
             for frame in removed:
                 delete_capture_for_vote(frame)
+            write_team_state(state, team_state_path)
+        await team_socket_hub.broadcast(state)
+        return state
+
+    @app.post("/team/trake/user-state")
+    async def update_trake_user_state(body: Dict[str, Any]):
+        client_id = str(body.get("client_id", "")).strip()
+        name = str(body.get("name", "")).strip()
+        event_num = int(body.get("event", 1))
+        if not client_id:
+            return JSONResponse({"detail": "client_id khong duoc rong"}, status_code=400)
+        event_num = max(1, min(5, event_num))
+        async with team_state_lock:
+            state = read_team_state(team_state_path)
+            state.setdefault("trake_users", {})
+            user_entry = state["trake_users"].setdefault(client_id, {
+                "name": name or "Thành viên",
+                "event": event_num,
+                "frames": [],
+                "updated_at": time.time(),
+            })
+            if name:
+                user_entry["name"] = name
+            user_entry["event"] = event_num
+            user_entry["updated_at"] = time.time()
+            write_team_state(state, team_state_path)
+        await team_socket_hub.broadcast(state)
+        return state
+
+    @app.post("/team/trake/user-frame/add")
+    async def add_trake_user_frame(body: Dict[str, Any]):
+        client_id = str(body.get("client_id", "")).strip()
+        name = str(body.get("name", "")).strip()
+        item = body.get("item")
+        event_num = int(body.get("event", 1))
+        if not client_id or not item:
+            return JSONResponse({"detail": "client_id va item khong duoc rong"}, status_code=400)
+        event_num = max(1, min(5, event_num))
+        async with team_state_lock:
+            state = read_team_state(team_state_path)
+            state.setdefault("trake_users", {})
+            user_entry = state["trake_users"].setdefault(client_id, {
+                "name": name or "Thành viên",
+                "event": event_num,
+                "frames": [],
+                "updated_at": time.time(),
+            })
+            if name:
+                user_entry["name"] = name
+            user_entry["event"] = event_num
+            user_entry["updated_at"] = time.time()
+
+            frames = user_entry.setdefault("frames", [])
+            keyframe_id = str(item.get("keyframe_id", ""))
+            if not any(f.get("item", {}).get("keyframe_id") == keyframe_id for f in frames):
+                frames.append({
+                    "selection_id": uuid.uuid4().hex,
+                    "event": event_num,
+                    "item": item,
+                    "created_at": time.time(),
+                })
+                user_entry["frames"] = frames[-50:]
+            write_team_state(state, team_state_path)
+        await team_socket_hub.broadcast(state)
+        return state
+
+    @app.post("/team/trake/user-frame/remove")
+    async def remove_trake_user_frame(body: Dict[str, Any]):
+        client_id = str(body.get("client_id", "")).strip()
+        selection_id = str(body.get("selection_id", "")).strip()
+        if not client_id or not selection_id:
+            return JSONResponse({"detail": "client_id va selection_id khong duoc rong"}, status_code=400)
+        async with team_state_lock:
+            state = read_team_state(team_state_path)
+            state.setdefault("trake_users", {})
+            user_entry = state["trake_users"].get(client_id)
+            if user_entry and "frames" in user_entry:
+                user_entry["frames"] = [f for f in user_entry["frames"] if f.get("selection_id") != selection_id]
+                user_entry["updated_at"] = time.time()
+                write_team_state(state, team_state_path)
+        await team_socket_hub.broadcast(state)
+        return state
+
+    @app.post("/team/trake/user-frame/clear")
+    async def clear_trake_user_frames(body: Dict[str, Any]):
+        client_id = str(body.get("client_id", "")).strip()
+        if not client_id:
+            return JSONResponse({"detail": "client_id khong duoc rong"}, status_code=400)
+        async with team_state_lock:
+            state = read_team_state(team_state_path)
+            state.setdefault("trake_users", {})
+            user_entry = state["trake_users"].get(client_id)
+            if user_entry:
+                user_entry["frames"] = []
+                user_entry["updated_at"] = time.time()
+                write_team_state(state, team_state_path)
+        await team_socket_hub.broadcast(state)
+        return state
+
+    @app.post("/team/trake/reorder")
+    async def reorder_trake_frames(body: Dict[str, Any]):
+        frames = body.get("frames")
+        if not isinstance(frames, list):
+            return JSONResponse({"detail": "frames phai la list"}, status_code=400)
+        async with team_state_lock:
+            state = read_team_state(team_state_path)
+            state["trake_frames"] = frames[:200]
             write_team_state(state, team_state_path)
         await team_socket_hub.broadcast(state)
         return state

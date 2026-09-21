@@ -13,16 +13,16 @@ echo =====================================================================
 
 :: 1. CẤU HÌNH ĐƯỜNG DẪN ẢNH SSD TRÊN MÁY BẠN
 :: Thay đổi đường dẫn tới thư mục keyframe trên SSD của bạn:
-set "KEYFRAMES_DIR=C:\uit\aic2026_resources\synthetic_frames\synthetic_frames"
-set "RECORDS_PATH=C:\uit\aic2026_resources\aic_resource\01_records_db\backend\artifacts\current_index\records.sqlite"
-set "ASR_INDEX=C:\uit\aic2026_resources\aic_resource\10_asr_index\backend\artifacts\asr_index\asr.sqlite"
+set "KEYFRAMES_DIR=F:\AI\AIC2026\data\synthetic_frames"
+set "RECORDS_PATH=F:\AI\AIC2026\system\backend\artifacts\current_index\records.sqlite"
+set "ASR_INDEX=F:\AI\AIC2026\system\backend\artifacts\asr_index\asr.sqlite"
 
 :: 2. ĐỊA CHỈ SERVER LINUX (Vừa làm Team Hub cổng 8080, vừa làm GPU AI cổng 8036)
 :: Thay <IP_SERVER_LINUX> bằng IP thực tế của Server (ví dụ: 192.168.1.50):
 set "SERVER_IP=192.168.20.156"
 
 set "TEAM_HUB_URL=http://192.168.20.156:8080"
-set "BACKEND_URL=http://192.168.20.156:8080"
+set "BACKEND_URL=http://127.0.0.1:8036"
 set "HLS_SERVER_URL=http://192.168.20.156:8080"
 set "TRANSLATOR_URL=http://127.0.0.1:8031"
 
@@ -42,26 +42,27 @@ if errorlevel 1 (
     pip install fastapi uvicorn websockets httpx
 )
 
-echo [3/3] Kiểm tra kết nối model dịch...
-powershell -NoProfile -Command "try { $r = Invoke-RestMethod -Uri 'http://127.0.0.1:8031/health' -TimeoutSec 2; if ($r.status -eq 'ok') { exit 0 } } catch {}; exit 1" >nul 2>&1
+echo [3/3] Kiểm tra tunnel model dịch và backend tìm kiếm...
+powershell -NoProfile -Command "try { $t = Invoke-RestMethod -Uri 'http://127.0.0.1:8031/health' -TimeoutSec 2; $b = Invoke-RestMethod -Uri 'http://127.0.0.1:8036/health' -TimeoutSec 2; if ($t.status -eq 'ok' -and $b.status -eq 'ok') { exit 0 } } catch {}; exit 1" >nul 2>&1
 if not errorlevel 1 goto TRANSLATOR_TUNNEL_READY
 
-echo [THÔNG BÁO] Đang mở model HPLT trên server và SSH tunnel cổng 8031...
-echo [THÔNG BÁO] Hãy nhập mật khẩu SSH trong cửa sổ HPLT Model + Tunnel vừa mở.
-start "AIC2026 Translator Tunnel" cmd.exe /k ""%~dp0start_translator_tunnel.bat""
+echo [THÔNG BÁO] Đang mở model HPLT và SSH tunnel cổng 8031 + 8036...
+echo [THÔNG BÁO] Hãy nhập mật khẩu SSH trong cửa sổ HPLT + Backend Tunnel vừa mở.
+start "AIC2026 HPLT + Backend Tunnel" cmd.exe /k ""%~dp0start_translator_tunnel.bat""
 
 set /a TRANSLATOR_WAIT_SECONDS=0
 :WAIT_TRANSLATOR_TUNNEL
 timeout /t 1 /nobreak >nul
-powershell -NoProfile -Command "try { $r = Invoke-RestMethod -Uri 'http://127.0.0.1:8031/health' -TimeoutSec 2; if ($r.status -eq 'ok') { exit 0 } } catch {}; exit 1" >nul 2>&1
+powershell -NoProfile -Command "try { $t = Invoke-RestMethod -Uri 'http://127.0.0.1:8031/health' -TimeoutSec 2; $b = Invoke-RestMethod -Uri 'http://127.0.0.1:8036/health' -TimeoutSec 2; if ($t.status -eq 'ok' -and $b.status -eq 'ok') { exit 0 } } catch {}; exit 1" >nul 2>&1
 if not errorlevel 1 goto TRANSLATOR_TUNNEL_READY
 set /a TRANSLATOR_WAIT_SECONDS+=1
 if %TRANSLATOR_WAIT_SECONDS% LSS 60 goto WAIT_TRANSLATOR_TUNNEL
-echo [CẢNH BÁO] Model HPLT chưa sẵn sàng sau 60 giây. Frontend vẫn khởi chạy nhưng tính năng dịch sẽ chưa dùng được.
+echo [CẢNH BÁO] Tunnel dịch hoặc backend chưa sẵn sàng sau 60 giây. Frontend vẫn khởi chạy nhưng dịch hoặc tìm kiếm có thể chưa dùng được.
 goto TRANSLATOR_TUNNEL_DONE
 
 :TRANSLATOR_TUNNEL_READY
-echo [OK] Model dịch đã kết nối qua http://127.0.0.1:8031
+echo [OK] Model dịch: http://127.0.0.1:8031
+echo [OK] Backend tìm kiếm: http://127.0.0.1:8036
 
 :TRANSLATOR_TUNNEL_DONE
 
