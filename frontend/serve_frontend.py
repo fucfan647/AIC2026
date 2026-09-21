@@ -1633,6 +1633,14 @@ def create_app(
         async with team_state_lock:
             state = read_team_state(team_state_path)
             state["members"][client_id] = {"name": name, "updated_at": time.time()}
+            trake_user = state["trake_users"].setdefault(client_id, {
+                "name": name,
+                "event": 1,
+                "frames": [],
+                "updated_at": time.time(),
+            })
+            trake_user["name"] = name
+            trake_user["updated_at"] = time.time()
             write_team_state(state, team_state_path)
         await team_socket_hub.broadcast(state)
         return state
@@ -1782,10 +1790,12 @@ def create_app(
             fps = float(params["fps"])
             shot_id = str(params.get("shot_id", "")).strip()
             target = str(params.get("target", "team")).strip().lower()
+            event_num = int(params.get("event", 1))
             if not client_id or not name or not video_id or frame_id < 0 or timestamp_ms < 0 or fps <= 0:
                 raise ValueError("tham so capture khong hop le")
-            if target not in {"team", "trake"}:
+            if target not in {"team", "trake", "trake_user"}:
                 raise ValueError("target capture khong hop le")
+            event_num = max(1, min(5, event_num))
             content_type = request.headers.get("content-type", "").split(";", 1)[0]
             if content_type not in {"image/jpeg", "image/png", "image/webp"}:
                 raise ValueError("capture phai la JPEG, PNG hoac WebP")
@@ -1824,25 +1834,48 @@ def create_app(
                 "item": item,
                 "created_at": time.time(),
             }
-            target_frames = state["trake_frames"] if target == "trake" else state["votes"]
-            if target == "trake" and target_frames and any(
-                frame.get("item", {}).get("video_id") != video_id for frame in target_frames
-            ):
-                image_path.unlink(missing_ok=True)
-                return JSONResponse({"detail": "TRAKE chi nhan cac frame thuoc cung mot video."}, status_code=400)
-            if target == "trake" and any(
-                frame.get("item", {}).get("video_id") == video_id
-                and str(frame.get("item", {}).get("frame_id", "")) == str(frame_id)
-                for frame in target_frames
-            ):
-                image_path.unlink(missing_ok=True)
-                return state
-            target_frames.append(selection)
-            expired = target_frames[:-200]
-            if target == "trake":
-                state["trake_frames"] = target_frames[-200:]
+            if target == "trake_user":
+                user_entry = state["trake_users"].setdefault(client_id, {
+                    "name": name,
+                    "event": event_num,
+                    "frames": [],
+                    "updated_at": time.time(),
+                })
+                user_entry["name"] = name
+                user_entry["event"] = event_num
+                user_entry["updated_at"] = time.time()
+                target_frames = user_entry.setdefault("frames", [])
+                if any(
+                    frame.get("item", {}).get("video_id") == video_id
+                    and str(frame.get("item", {}).get("frame_id", "")) == str(frame_id)
+                    for frame in target_frames
+                ):
+                    image_path.unlink(missing_ok=True)
+                    return state
+                selection["event"] = event_num
+                target_frames.append(selection)
+                expired = target_frames[:-50]
+                user_entry["frames"] = target_frames[-50:]
             else:
-                state["votes"] = target_frames[-200:]
+                target_frames = state["trake_frames"] if target == "trake" else state["votes"]
+                if target == "trake" and target_frames and any(
+                    frame.get("item", {}).get("video_id") != video_id for frame in target_frames
+                ):
+                    image_path.unlink(missing_ok=True)
+                    return JSONResponse({"detail": "TRAKE chi nhan cac frame thuoc cung mot video."}, status_code=400)
+                if target == "trake" and any(
+                    frame.get("item", {}).get("video_id") == video_id
+                    and str(frame.get("item", {}).get("frame_id", "")) == str(frame_id)
+                    for frame in target_frames
+                ):
+                    image_path.unlink(missing_ok=True)
+                    return state
+                target_frames.append(selection)
+                expired = target_frames[:-200]
+                if target == "trake":
+                    state["trake_frames"] = target_frames[-200:]
+                else:
+                    state["votes"] = target_frames[-200:]
             for vote in expired:
                 delete_capture_for_vote(vote)
             write_team_state(state, team_state_path)
@@ -1987,7 +2020,16 @@ def create_app(
             state.setdefault("trake_users", {})
             user_entry = state["trake_users"].get(client_id)
             if user_entry and "frames" in user_entry:
-                user_entry["frames"] = [f for f in user_entry["frames"] if f.get("selection_id") != selection_id]
+                removed = [
+                    frame for frame in user_entry["frames"]
+                    if frame.get("selection_id") == selection_id
+                ]
+                user_entry["frames"] = [
+                    frame for frame in user_entry["frames"]
+                    if frame.get("selection_id") != selection_id
+                ]
+                for frame in removed:
+                    delete_capture_for_vote(frame)
                 user_entry["updated_at"] = time.time()
                 write_team_state(state, team_state_path)
         await team_socket_hub.broadcast(state)
@@ -2003,6 +2045,8 @@ def create_app(
             state.setdefault("trake_users", {})
             user_entry = state["trake_users"].get(client_id)
             if user_entry:
+                for frame in user_entry.get("frames", []):
+                    delete_capture_for_vote(frame)
                 user_entry["frames"] = []
                 user_entry["updated_at"] = time.time()
                 write_team_state(state, team_state_path)
