@@ -405,6 +405,7 @@ async function loadSubmissionQueries() {
     renderQueryStrip();
     renderActiveQuery();
     if (state.memberName) syncUserProfile({ restore_active_query: !savedQuery });
+    if (els.errorBanner.textContent.startsWith('Không tải được danh sách query:')) showError('');
   } catch (error) {
     showError(`Không tải được danh sách query: ${error.message || error}`);
   }

@@ -701,25 +701,38 @@ def create_app(
             if k.lower() not in excluded_headers:
                 headers[k] = v
 
-        try:
-            resp = await team_hub_client.request(
-                method=request.method,
-                url=target_url,
-                content=body,
-                headers=headers,
-            )
-            resp_headers = {}
-            for k, v in resp.headers.items():
-                if k.lower() not in {"transfer-encoding", "content-encoding", "connection"}:
-                    resp_headers[k] = v
-            return Response(
-                content=resp.content,
-                status_code=resp.status_code,
-                headers=resp_headers,
-                media_type=resp.headers.get("content-type"),
-            )
-        except Exception as exc:
-            return JSONResponse({"detail": f"Goi Team Hub that bai ({target_url}): {exc}"}, status_code=502)
+        last_error: Optional[Exception] = None
+        for attempt in range(2):
+            try:
+                resp = await team_hub_client.request(
+                    method=request.method,
+                    url=target_url,
+                    content=body,
+                    headers=headers,
+                )
+                resp_headers = {}
+                for k, v in resp.headers.items():
+                    if k.lower() not in {"transfer-encoding", "content-encoding", "connection"}:
+                        resp_headers[k] = v
+                return Response(
+                    content=resp.content,
+                    status_code=resp.status_code,
+                    headers=resp_headers,
+                    media_type=resp.headers.get("content-type"),
+                )
+            except httpx.TransportError as exc:
+                last_error = exc
+                if attempt == 0:
+                    await asyncio.sleep(0.15)
+                    continue
+                break
+            except Exception as exc:  # noqa: BLE001
+                last_error = exc
+                break
+        return JSONResponse(
+            {"detail": f"Goi Team Hub that bai ({target_url}): {last_error}"},
+            status_code=502,
+        )
 
     if team_hub_url:
         @app.middleware("http")
