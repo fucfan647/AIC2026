@@ -57,3 +57,33 @@ def test_captured_trake_frames_are_isolated_by_user_and_visible_in_team_state(tm
         assert response.status_code == 200
         assert response.json()["trake_users"]["alice-id"]["frames"] == []
         assert not alice_capture.exists()
+
+        response = client.post(
+            "/team/capture",
+            params={
+                "client_id": "bob-id",
+                "name": "Bob",
+                "video_id": "L21_V001",
+                "frame_id": 240,
+                "timestamp_ms": 9600,
+                "fps": 25,
+                "target": "team",
+            },
+            content=b"jpeg-data",
+            headers={"Content-Type": "image/jpeg"},
+        )
+        assert response.status_code == 200
+        bob_vote = next(vote for vote in response.json()["votes"] if vote["client_id"] == "bob-id")
+        bob_vote_capture = capture_dir / Path(bob_vote["item"]["image_url"]).name
+        bob_trake_capture = capture_dir / Path(
+            response.json()["trake_users"]["bob-id"]["frames"][0]["item"]["image_url"]
+        ).name
+        assert bob_vote_capture.is_file()
+        assert bob_trake_capture.is_file()
+
+        response = client.post("/team/trake/user/remove", json={"client_id": "bob-id"})
+        assert response.status_code == 200
+        assert "bob-id" not in response.json()["trake_users"]
+        assert all(vote["client_id"] != "bob-id" for vote in response.json()["votes"])
+        assert not bob_vote_capture.exists()
+        assert not bob_trake_capture.exists()

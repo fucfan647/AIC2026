@@ -4743,7 +4743,14 @@ textarea {
   gap: 8px;
 }
 
-.trake-user-clear-btn {
+.trake-user-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.trake-user-clear-btn,
+.trake-user-delete-btn {
   padding: 3px 7px;
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -4754,7 +4761,8 @@ textarea {
   font-weight: 700;
 }
 
-.trake-user-clear-btn:hover {
+.trake-user-clear-btn:hover,
+.trake-user-delete-btn:hover {
   border-color: var(--danger);
   background: var(--accent-soft);
 }

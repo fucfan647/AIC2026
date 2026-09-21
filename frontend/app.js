@@ -135,7 +135,6 @@ const els = {
   trakeMasterFrames: document.getElementById('trakeMasterFrames'),
   trakeAddMyEventBtn: document.getElementById('trakeAddMyEventBtn'),
   trakeUserCards: document.getElementById('trakeUserCards'),
-  videoAddTrakeBtn: document.getElementById('videoAddTrakeBtn'),
   videoTrakeTray: document.getElementById('videoTrakeTray'),
   videoMainLayout: document.querySelector('.video-main-layout'),
   videoTrakeCount: document.getElementById('videoTrakeCount'),
@@ -2008,7 +2007,7 @@ function fpsForVideo(videoId) {
 function captureDisplayedFrame() {
   const item = state.activeVideoItem;
   if (!state.memberName) {
-    showError('Nhập tên gọi trước khi thêm frame vào khay chung.');
+    showError('Nhập tên gọi trước khi thêm frame vào khay.');
     openDresModal();
     return;
   }
@@ -2038,103 +2037,44 @@ function captureDisplayedFrame() {
       return;
     }
     const frameId = Math.max(0, Math.floor(mediaTime * fps + 1e-6));
-    const duplicate = state.teamVotes.some(vote =>
+    const existsInTeamTray = state.teamVotes.some(vote =>
       vote.client_id === state.clientId
       && vote.item?.video_id === item.video_id
       && Number(vote.item?.frame_id) === frameId
     );
-    if (duplicate) {
-      showError('Frame này đã có trong khay.');
-      return;
-    }
-    const params = new URLSearchParams({
-      client_id: state.clientId,
-      name: state.memberName,
-      video_id: item.video_id,
-      shot_id: item.shot_id ?? '',
-      frame_id: String(frameId),
-      timestamp_ms: String(Math.round(mediaTime * 1000)),
-      fps: String(fps),
-      target: 'team'
-    });
-    try {
-      const resp = await fetch(`/team/capture?${params}`, {
-        method: 'POST',
-        headers: {'Content-Type': blob.type || 'image/jpeg'},
-        body: blob
-      });
-      const teamState = await resp.json();
-      if (!resp.ok) throw new Error(teamState.detail || 'Không thêm được frame vào khay chung.');
-      applyTeamState(teamState);
-      showError('');
-    } catch (error) {
-      showError(error.message || String(error));
-    }
-  }, 'image/jpeg', 0.9);
-}
-
-function captureDisplayedFrameToTrake() {
-  const item = state.activeVideoItem;
-  if (!state.memberName) {
-    showError('Nhập tên gọi trước khi thêm frame vào TRAKE.');
-    openDresModal();
-    return;
-  }
-  if (!item || els.player.readyState < HTMLMediaElement.HAVE_CURRENT_DATA || !els.player.videoWidth) {
-    showError('Video chưa sẵn sàng để lấy frame.');
-    return;
-  }
-  els.player.pause();
-  const mediaTime = Math.max(0, Number(els.player.currentTime) || 0);
-  const fps = fpsForVideo(item.video_id);
-  if (!Number.isFinite(fps) || fps <= 0) {
-    showError(`Không tìm thấy FPS của video ${item.video_id}.`);
-    return;
-  }
-  const canvas = document.createElement('canvas');
-  canvas.width = els.player.videoWidth;
-  canvas.height = els.player.videoHeight;
-  const context = canvas.getContext('2d');
-  if (!context) {
-    showError('Trình duyệt không tạo được canvas để lấy frame.');
-    return;
-  }
-  context.drawImage(els.player, 0, 0, canvas.width, canvas.height);
-  canvas.toBlob(async blob => {
-    if (!blob) {
-      showError('Không thêm được frame đang hiển thị vào TRAKE.');
-      return;
-    }
-    const frameId = Math.max(0, Math.floor(mediaTime * fps + 1e-6));
-    const myFrames = state.trakeUsers?.[state.clientId]?.frames || [];
-    const duplicate = myFrames.some(frame =>
+    const existsInMyTrakeTray = (state.trakeUsers?.[state.clientId]?.frames || []).some(frame =>
       frame.item?.video_id === item.video_id
       && Number(frame.item?.frame_id) === frameId
     );
-    if (duplicate) {
-      showError('Frame này đã có trong khay TRAKE của bạn.');
+    const targets = [];
+    if (!existsInTeamTray) targets.push('team');
+    if (!existsInMyTrakeTray) targets.push('trake_user');
+    if (targets.length === 0) {
+      showError('Frame này đã có trong cả hai khay.');
       return;
     }
-    const params = new URLSearchParams({
-      client_id: state.clientId,
-      name: state.memberName || state.dresUsername || 'Thành viên',
-      video_id: item.video_id,
-      shot_id: item.shot_id ?? '',
-      frame_id: String(frameId),
-      timestamp_ms: String(Math.round(mediaTime * 1000)),
-      fps: String(fps),
-      target: 'trake_user',
-      event: String(state.myTrakeEvent || 1)
-    });
     try {
-      const resp = await fetch(`/team/capture?${params}`, {
-        method: 'POST',
-        headers: {'Content-Type': blob.type || 'image/jpeg'},
-        body: blob
-      });
-      const teamState = await resp.json();
-      if (!resp.ok) throw new Error(teamState.detail || 'Không thêm được frame vào khay TRAKE của bạn.');
-      applyTeamState(teamState);
+      for (const target of targets) {
+        const params = new URLSearchParams({
+          client_id: state.clientId,
+          name: state.memberName,
+          video_id: item.video_id,
+          shot_id: item.shot_id ?? '',
+          frame_id: String(frameId),
+          timestamp_ms: String(Math.round(mediaTime * 1000)),
+          fps: String(fps),
+          target,
+          event: String(state.myTrakeEvent || 1)
+        });
+        const resp = await fetch(`/team/capture?${params}`, {
+          method: 'POST',
+          headers: {'Content-Type': blob.type || 'image/jpeg'},
+          body: blob
+        });
+        const teamState = await resp.json();
+        if (!resp.ok) throw new Error(teamState.detail || 'Không thêm được frame vào khay.');
+        applyTeamState(teamState);
+      }
       showError('');
     } catch (error) {
       showError(error.message || String(error));
@@ -2182,13 +2122,18 @@ function keyframeTrayId(item) {
   return Math.max(0, Math.floor((answerTimeMs(item) / 1000) * fps + 1e-6));
 }
 
-function isKeyframeInTray(item) {
+function isKeyframeInBothTrays(item) {
   const targetFrameId = keyframeTrayId(item);
-  return state.teamVotes.some(vote =>
+  const existsInTeamTray = state.teamVotes.some(vote =>
     vote.client_id === state.clientId
     && vote.item?.video_id === item.video_id
     && (vote.item?.keyframe_id === item.keyframe_id || Number(vote.item?.frame_id) === targetFrameId)
   );
+  const existsInMyTray = (state.trakeUsers?.[state.clientId]?.frames || []).some(frame =>
+    frame.item?.video_id === item.video_id
+    && (frame.item?.keyframe_id === item.keyframe_id || Number(frame.item?.frame_id) === targetFrameId)
+  );
+  return existsInTeamTray && existsInMyTray;
 }
 
 async function addKeyframeToTray(item) {
@@ -2199,10 +2144,6 @@ async function addKeyframeToTray(item) {
     return false;
   }
   const targetFrameId = keyframeTrayId(item);
-  if (isKeyframeInTray(item)) {
-    showError('Frame này đã có trong khay.');
-    return false;
-  }
   const timestampMs = answerTimeMs(item);
   const sharedItem = {
     ...item,
@@ -2214,7 +2155,7 @@ async function addKeyframeToTray(item) {
     timestamp_seconds: timestampMs / 1000,
     fps
   };
-  return voteForItem(sharedItem);
+  return addFrameToBothTrays(sharedItem);
 }
 
 function openShotOverview() {
@@ -2748,7 +2689,7 @@ function openFrameImage(item) {
   els.imagePreview.src = item.image_url || `/keyframe/${item.keyframe_id}`;
   els.imagePreview.alt = `${item.video_id} cảnh ${item.shot_id}`;
   els.imageMeta.innerHTML = keyframeInfoHtml(item);
-  setImageAddTrayState(isKeyframeInTray(item));
+  setImageAddTrayState(isKeyframeInBothTrays(item));
   if (els.imageTextDetails) {
     const hasExistingText = item.ocr_text || item.asr_text;
     renderFrameTextDetails(els.imageTextDetails, null, item, !hasExistingText);
@@ -2771,7 +2712,7 @@ function closeFrameImage() {
 }
 
 function selectResult(item) {
-  voteForItem(item);
+  void addFrameToBothTrays(item);
 }
 
 function renderShotContext(item) {
@@ -3354,12 +3295,12 @@ function renderTaskControls() {
     els.videoSubmitCurrentBtn.hidden = false;
   }
 
-  // Cột TRAKE và nút Add TRAKE chỉ hiển thị khi chọn loại bài TRAKE
+  // Cột TRAKE chỉ hiển thị khi chọn loại bài TRAKE.
   if (els.videoTrakeTray) {
     els.videoTrakeTray.hidden = !isTrake;
   }
-  if (els.videoAddTrakeBtn) {
-    els.videoAddTrakeBtn.hidden = !isTrake;
+  if (els.captureFrameBtn) {
+    els.captureFrameBtn.title = 'Thêm frame đang hiển thị vào khay chung và khay riêng của bạn';
   }
   const mainLayout = els.videoMainLayout || document.querySelector('.video-main-layout');
   if (mainLayout) {
@@ -4709,8 +4650,7 @@ els.closeFrameOverviewBtn.addEventListener('click', closeFrameOverview);
 document.querySelector('[data-close-frame-overview]').addEventListener('click', closeFrameOverview);
 els.closeVideoBtn.addEventListener('click', closeVideo);
 document.querySelector('[data-close-video]').addEventListener('click', closeVideo);
-els.captureFrameBtn.addEventListener('click', captureDisplayedFrame);
-if (els.videoAddTrakeBtn) els.videoAddTrakeBtn.addEventListener('click', captureDisplayedFrameToTrake);
+els.captureFrameBtn.addEventListener('click', () => captureDisplayedFrame());
 els.videoSubmitCurrentBtn.addEventListener('click', () => {
   const item = getDisplayedVideoFrameItem();
   if (item) submit(item);
@@ -5183,6 +5123,35 @@ async function addFrameToMyEvent(item = null) {
   }
 }
 
+async function addFrameToBothTrays(item) {
+  if (!item?.video_id) return false;
+  const targetFrameId = keyframeTrayId(item);
+  const existsInTeamTray = state.teamVotes.some(vote =>
+    vote.client_id === state.clientId
+    && vote.item?.video_id === item.video_id
+    && (
+      (item.keyframe_id && vote.item?.keyframe_id === item.keyframe_id)
+      || Number(vote.item?.frame_id) === targetFrameId
+    )
+  );
+  const existsInMyTray = (state.trakeUsers?.[state.clientId]?.frames || []).some(frame =>
+    frame.item?.video_id === item.video_id
+    && (
+      (item.keyframe_id && frame.item?.keyframe_id === item.keyframe_id)
+      || Number(frame.item?.frame_id) === targetFrameId
+    )
+  );
+  if (existsInTeamTray && existsInMyTray) {
+    showError('Frame này đã có trong cả hai khay.');
+    return false;
+  }
+
+  let added = false;
+  if (!existsInTeamTray) added = await voteForItem(item);
+  if (!existsInMyTray) added = await addFrameToMyEvent(item) || added;
+  return added;
+}
+
 async function removeFrameFromMyEvent(selectionId) {
   if (state.trakeUsers?.[state.clientId]?.frames) {
     state.trakeUsers[state.clientId].frames = state.trakeUsers[state.clientId].frames.filter(
@@ -5228,6 +5197,26 @@ async function clearMyTrakeFrames() {
     myEntry.frames = previousFrames;
     renderTrakeDrawer();
     renderTrakeTray();
+    showError(err.message || String(err));
+  }
+}
+
+async function removeTrakeUser(clientId, name, frameCount) {
+  const description = frameCount > 0
+    ? `Xóa user ${name} cùng ${frameCount} frame khỏi cả hai khay?`
+    : `Xóa user ${name} khỏi Team Hub?`;
+  if (!window.confirm(description)) return;
+  try {
+    const resp = await fetch('/team/trake/user/remove', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({client_id: clientId})
+    });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.detail || `Không xóa được user ${name}.`);
+    applyTeamState(data);
+    showError('');
+  } catch (err) {
     showError(err.message || String(err));
   }
 }
@@ -5374,7 +5363,10 @@ function renderTrakeUserCards() {
           <span class="trake-user-name">${escapeHtml(name)}</span>
           ${isMe ? '<span class="trake-me-badge">Bạn</span>' : ''}
         </div>
-        ${isMe && frames.length > 0 ? '<button class="trake-user-clear-btn" type="button" title="Xóa toàn bộ frame trong khay của bạn">Xóa khay</button>' : ''}
+        <div class="trake-user-head-actions">
+          ${isMe && frames.length > 0 ? '<button class="trake-user-clear-btn" type="button" title="Xóa toàn bộ frame trong khay của bạn">Xóa khay</button>' : ''}
+          <button class="trake-user-delete-btn" type="button" title="Xóa user này khỏi Team Hub">Xóa user</button>
+        </div>
       </div>
       <div class="trake-event-control-wrap">
         <span class="trake-event-label">Đang làm Event:</span>
@@ -5385,6 +5377,10 @@ function renderTrakeUserCards() {
       <div class="trake-user-tray" data-uid="${escapeHtml(uid)}">
       </div>
     `;
+
+    card.querySelector('.trake-user-delete-btn')?.addEventListener('click', () => {
+      void removeTrakeUser(uid, name, frames.length);
+    });
 
     if (isMe) {
       card.querySelector('.trake-user-clear-btn')?.addEventListener('click', clearMyTrakeFrames);
@@ -5420,7 +5416,7 @@ function renderTrakeUserCards() {
           try {
             const item = JSON.parse(keyframeJson);
             if (item) {
-              await addFrameToMyEvent(item);
+              await addFrameToBothTrays(item);
             }
           } catch (err) {
             console.error('Failed to drop keyframe to user tray:', err);
@@ -5430,7 +5426,7 @@ function renderTrakeUserCards() {
     }
     if (frames.length === 0) {
       tray.innerHTML = isMe
-        ? `<span class="trake-user-empty">Khay của bạn đang trống. Bấm "Thêm vào khay của tôi" hoặc kéo frame vào đây.</span>`
+        ? `<span class="trake-user-empty">Khay của bạn đang trống. Bấm "Thêm frame" hoặc kéo frame vào đây.</span>`
         : `<span class="trake-user-empty">${escapeHtml(name)} chưa thêm frame nào.</span>`;
     } else {
       frames.forEach(f => {
@@ -5504,8 +5500,12 @@ function initTrakeDrawerEvents() {
   }
   if (els.trakeAddMyEventBtn) {
     els.trakeAddMyEventBtn.addEventListener('click', () => {
-      if (state.activeVideoItem) captureDisplayedFrameToTrake();
-      else void addFrameToMyEvent();
+      if (state.activeVideoItem) captureDisplayedFrame();
+      else {
+        const item = state.selected?.[0] || (state.results?.[0]?.video_id ? state.results[0] : state.results?.[0]?.scenes?.[0]);
+        if (item) void addFrameToBothTrays(item);
+        else showError('Không tìm thấy frame nào để thêm vào khay.');
+      }
     });
   }
   if (els.trakeMasterDropzone) {

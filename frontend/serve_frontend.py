@@ -2053,6 +2053,31 @@ def create_app(
         await team_socket_hub.broadcast(state)
         return state
 
+    @app.post("/team/trake/user/remove")
+    async def remove_trake_user(body: Dict[str, Any]):
+        client_id = str(body.get("client_id", "")).strip()
+        if not client_id:
+            return JSONResponse({"detail": "client_id khong duoc rong"}, status_code=400)
+        async with team_state_lock:
+            state = read_team_state(team_state_path)
+            user_entry = state.setdefault("trake_users", {}).pop(client_id, None)
+            removed_votes = [
+                vote for vote in state.get("votes", [])
+                if vote.get("client_id") == client_id
+            ]
+            state["votes"] = [
+                vote for vote in state.get("votes", [])
+                if vote.get("client_id") != client_id
+            ]
+            state.setdefault("members", {}).pop(client_id, None)
+            for frame in (user_entry or {}).get("frames", []):
+                delete_capture_for_vote(frame)
+            for vote in removed_votes:
+                delete_capture_for_vote(vote)
+            write_team_state(state, team_state_path)
+        await team_socket_hub.broadcast(state)
+        return state
+
     @app.post("/team/trake/reorder")
     async def reorder_trake_frames(body: Dict[str, Any]):
         frames = body.get("frames")
