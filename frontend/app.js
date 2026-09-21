@@ -3703,7 +3703,6 @@ function scheduleTeamSocketReconnect() {
   state.teamSocketRetryTimer = window.setTimeout(() => {
     state.teamSocketRetryTimer = null;
     connectTeamSocket();
-initTrakeDrawerEvents();
   }, 1500);
 }
 
@@ -5021,6 +5020,7 @@ loadSubmissionQueries();
 loadVideoFps();
 refreshHealth();
 connectTeamSocket();
+initTrakeDrawerEvents();
 window.setInterval(() => {
   loadSubmissionQueries();
   refreshTeamState();
@@ -5098,16 +5098,30 @@ document.getElementById('clearStatsBtn')?.addEventListener('click', async () => 
 
 function toggleTrakeDrawer(forceState = null) {
   if (!els.trakeDrawer) return;
-  const next = forceState !== null ? Boolean(forceState) : els.trakeDrawer.hidden;
-  els.trakeDrawer.hidden = !next;
-  state.trakeDrawerOpen = next;
+  const isOpen = els.trakeDrawer.classList.contains('is-open');
+  const next = forceState !== null ? Boolean(forceState) : !isOpen;
+
+  if (next) {
+    els.trakeDrawer.hidden = false;
+    void els.trakeDrawer.offsetWidth; // Force reflow
+    els.trakeDrawer.classList.add('is-open');
+    els.trakePanelToggleBtn?.classList.add('is-active');
+    state.trakeDrawerOpen = true;
+    renderTrakeDrawer();
+    refreshIcons(els.trakeDrawer);
+  } else {
+    els.trakeDrawer.classList.remove('is-open');
+    els.trakePanelToggleBtn?.classList.remove('is-active');
+    state.trakeDrawerOpen = false;
+    window.setTimeout(() => {
+      if (!els.trakeDrawer.classList.contains('is-open')) {
+        els.trakeDrawer.hidden = true;
+      }
+    }, 300);
+  }
   try {
     localStorage.setItem('aic_trake_drawer_open', next ? '1' : '0');
   } catch {}
-  if (next) {
-    renderTrakeDrawer();
-    refreshIcons(els.trakeDrawer);
-  }
 }
 
 async function setMyTrakeEvent(eventNum) {
