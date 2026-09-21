@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Team Prometheus</title>
-  <link rel="stylesheet" href="./styles.css?v=20260831-beit3-toggle" />
+  <link rel="stylesheet" href="./styles.css?v=20260921-trake-user-trays" />
 </head>
 <body>
   <div id="appShell" class="app-shell">
@@ -110,6 +110,69 @@
       <div id="selectedFrames" class="selected-frames"></div>
     </section>
   </div>
+
+  <!-- Floating TRAKE Panel Toggle Button on the Right -->
+  <button id="trakePanelToggleBtn" class="trake-panel-toggle-btn" type="button" title="Mở bảng phối hợp TRAKE" aria-label="Mở bảng phối hợp TRAKE">
+    <span class="trake-toggle-icon">🎯</span>
+    <span class="trake-toggle-label">TRAKE</span>
+    <span id="trakeToggleCount" class="trake-toggle-badge" hidden>0</span>
+  </button>
+
+  <!-- Expandable TRAKE Collaboration Drawer -->
+  <aside id="trakeDrawer" class="trake-drawer" hidden aria-label="Bảng phối hợp TRAKE">
+    <div class="trake-drawer-inner">
+      <header class="trake-drawer-head">
+        <div class="trake-drawer-title-wrap">
+          <span class="trake-title-icon">🎯</span>
+          <div>
+            <strong>TRAKE Collaboration</strong>
+            <div class="trake-subtitle">Phối hợp chuỗi sự kiện theo thời gian</div>
+          </div>
+        </div>
+        <button id="closeTrakeDrawerBtn" class="ghost compact trake-close-btn" type="button" title="Đóng bảng TRAKE" aria-label="Đóng bảng TRAKE">✕</button>
+      </header>
+
+      <!-- Khay chung (Master Tray) để nộp bài -->
+      <section class="trake-master-section" aria-label="Khay chung nộp bài">
+        <div class="trake-section-header">
+          <div class="trake-section-title">
+            <strong>Khay Chung Nộp Bài</strong>
+            <span id="trakeMasterCount" class="trake-count-badge">0 frame</span>
+            <span id="trakeMasterVideo" class="trake-video-badge" hidden></span>
+          </div>
+          <div class="trake-section-actions">
+            <button id="trakeMasterClearBtn" class="ghost compact trake-clear-btn" type="button" title="Xóa toàn bộ frame trong khay chung">Xóa hết</button>
+            <button id="trakeMasterSubmitBtn" class="primary trake-submit-btn" type="button" title="Nộp chuỗi TRAKE lên DRES" disabled>
+              <i data-lucide="send" aria-hidden="true"></i>
+              <span>Nộp</span>
+            </button>
+          </div>
+        </div>
+        <div class="trake-master-dropzone" id="trakeMasterDropzone">
+          <div id="trakeMasterFrames" class="trake-frames-list">
+            <div class="trake-empty-hint">Kéo frame từ khay của thành viên hoặc từ kết quả tìm kiếm thả vào đây để nộp.</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Mỗi thành viên có một khay frame riêng, đồng bộ cho cả đội -->
+      <section class="trake-members-section" aria-label="Thành viên trong đội">
+        <div class="trake-section-header">
+          <div class="trake-section-title">
+            <strong>Khay riêng của thành viên</strong>
+          </div>
+          <button id="trakeAddMyEventBtn" class="ghost compact trake-add-current-btn" type="button" title="Thêm frame vào khay chung và khay riêng của bạn">
+            <i data-lucide="plus" aria-hidden="true"></i>
+            <span>Thêm frame</span>
+          </button>
+        </div>
+        <div id="trakeUserCards" class="trake-user-cards">
+          <!-- Dynamic user cards rendered by JS -->
+        </div>
+      </section>
+    </div>
+  </aside>
+
   <div id="videoModal" class="video-modal" hidden>
     <div class="modal-backdrop" data-close-video></div>
     <section class="modal-panel video-panel" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
@@ -153,8 +216,7 @@
               </div>
               <div class="video-control-right" aria-label="Tác vụ và phát">
                 <div class="video-btn-group">
-                  <button id="captureFrameBtn" class="video-capture-btn" type="button" title="Thêm đúng frame đang hiển thị vào khay chung">Thêm vào khay</button>
-                  <button id="videoAddTrakeBtn" class="video-capture-btn video-trake-add-btn" type="button" title="Thêm frame đang hiển thị vào TRAKE">Add TRAKE</button>
+                  <button id="captureFrameBtn" class="video-capture-btn" type="button" title="Thêm đúng frame đang hiển thị vào khay chung và khay riêng của bạn">Thêm frame</button>
                   <button id="videoSubmitCurrentBtn" class="video-submit-current-btn" type="button" title="Submit frame đang hiển thị lên DRES" aria-label="Submit frame đang hiển thị lên DRES"><i data-lucide="send"></i></button>
                 </div>
                 <div class="video-btn-group">
@@ -181,17 +243,14 @@
             <div id="videoFrameStrip" class="video-frame-strip" aria-label="Frame lân cận"></div>
           </div>
         </div>
-        <aside id="videoTrakeTray" class="video-trake-tray" aria-label="Khay TRAKE">
+        <aside id="videoTrakeTray" class="video-trake-tray" aria-label="Khay TRAKE theo thành viên">
           <div class="video-trake-header">
             <div class="video-trake-title-wrap">
-              <strong>TRAKE</strong>
+              <strong>Khay thành viên</strong>
               <span id="videoTrakeCount" class="video-trake-badge">0</span>
             </div>
             <div class="video-trake-actions">
-              <button id="videoTrakeClearBtn" class="ghost compact video-trake-clear-btn" type="button" title="Xóa toàn bộ frame TRAKE">Xóa</button>
-              <button id="videoTrakeSubmitBtn" class="primary trake-submit video-trake-submit" type="button" title="Nộp TRAKE lên DRES" aria-label="Nộp TRAKE lên DRES">
-                <i data-lucide="send" aria-hidden="true"></i>
-              </button>
+              <button id="videoOpenTrakeDrawerBtn" class="ghost compact video-trake-open-btn" type="button" title="Mở bảng phối hợp và khay nộp chung">Mở bảng</button>
             </div>
           </div>
           <div id="videoTrakeFrames" class="video-trake-frames-list"></div>
@@ -411,6 +470,6 @@
   <audio id="correctSubmissionSound" src="/correct-submission-sound.mp3" preload="auto"></audio>
   <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.18/dist/hls.min.js"></script>
   <script src="https://unpkg.com/lucide@1.27.0/dist/umd/lucide.min.js"></script>
-  <script src="./app.js?v=20260831-beit3-toggle"></script>
+  <script src="./app.js?v=20260921-trake-user-trays"></script>
 </body>
 </html>
