@@ -24,7 +24,7 @@ set "SERVER_IP=192.168.20.156"
 set "TEAM_HUB_URL=http://192.168.20.156:8080"
 set "BACKEND_URL=http://192.168.20.156:8080"
 set "HLS_SERVER_URL=http://192.168.20.156:8080"
-set "TRANSLATOR_URL=http://127.0.0.1:8031"
+set "TRANSLATOR_URL=http://127.0.0.1:8032"
 
 echo.
 echo [1/3] Kiểm tra Python...
@@ -43,25 +43,26 @@ if errorlevel 1 (
 )
 
 echo [3/3] Kiểm tra kết nối model dịch...
-powershell -NoProfile -Command "try { $r = Invoke-RestMethod -Uri 'http://127.0.0.1:8031/health' -TimeoutSec 2; if ($r.status -eq 'ok') { exit 0 } } catch {}; exit 1" >nul 2>&1
+powershell -NoProfile -Command "try { $r = Invoke-RestMethod -Uri 'http://127.0.0.1:8032/health' -TimeoutSec 2; if ($r.status -eq 'ok') { exit 0 } } catch {}; exit 1" >nul 2>&1
 if not errorlevel 1 goto TRANSLATOR_TUNNEL_READY
 
-echo [THÔNG BÁO] Đang mở model HPLT trên server và SSH tunnel cổng 8031...
-echo [THÔNG BÁO] Hãy nhập mật khẩu SSH trong cửa sổ HPLT Model + Tunnel vừa mở.
-start "AIC2026 Translator Tunnel" cmd.exe /k ""%~dp0start_translator_tunnel.bat""
+echo [THÔNG BÁO] Đang mở SSH tunnel cổng 8032...
+echo [THÔNG BÁO] Hãy nhập mật khẩu SSH trong cửa sổ Translator Tunnel vừa mở.
+start "AIC2026 Translator Tunnel" cmd.exe /k "%~dp0start_translator_tunnel.bat"
 
 set /a TRANSLATOR_WAIT_SECONDS=0
 :WAIT_TRANSLATOR_TUNNEL
 timeout /t 1 /nobreak >nul
-powershell -NoProfile -Command "try { $r = Invoke-RestMethod -Uri 'http://127.0.0.1:8031/health' -TimeoutSec 2; if ($r.status -eq 'ok') { exit 0 } } catch {}; exit 1" >nul 2>&1
+powershell -NoProfile -Command "try { $r = Invoke-RestMethod -Uri 'http://127.0.0.1:8032/health' -TimeoutSec 2; if ($r.status -eq 'ok') { exit 0 } } catch {}; exit 1" >nul 2>&1
 if not errorlevel 1 goto TRANSLATOR_TUNNEL_READY
 set /a TRANSLATOR_WAIT_SECONDS+=1
-if %TRANSLATOR_WAIT_SECONDS% LSS 60 goto WAIT_TRANSLATOR_TUNNEL
-echo [CẢNH BÁO] Model HPLT chưa sẵn sàng sau 60 giây. Frontend vẫn khởi chạy nhưng tính năng dịch sẽ chưa dùng được.
+if %TRANSLATOR_WAIT_SECONDS% LSS 10 goto WAIT_TRANSLATOR_TUNNEL
+echo [CẢNH BÁO] Chưa kết nối được model dịch sau 10 giây (SSH tunnel chưa mở hoặc server chưa bật).
+echo [THÔNG BÁO] Hệ thống vẫn tiếp tục khởi chạy giao diện tìm kiếm bình thường...
 goto TRANSLATOR_TUNNEL_DONE
 
 :TRANSLATOR_TUNNEL_READY
-echo [OK] Model dịch đã kết nối qua http://127.0.0.1:8031
+echo [OK] Model dịch Qwen 3.5-4B đã kết nối qua http://127.0.0.1:8032
 
 :TRANSLATOR_TUNNEL_DONE
 

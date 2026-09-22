@@ -868,7 +868,7 @@ function renderStages() {
         <label class="text-query-field">
           <span class="query-field-heading"><b class="query-field-icon" aria-hidden="true">${stageLetter(index)}</b>Text Query</span>
           <textarea class="text-query" placeholder="Mô tả hành động ${stageLetter(index)}..."></textarea>
-          <button class="translate-query-btn" type="button" data-translate-query title="Dịch Text Query sang tiếng Anh bằng HPLT">Dịch sang English</button>
+          <button class="translate-query-btn" type="button" data-translate-query title="Dịch Text Query sang tiếng Anh bằng Qwen 3.5-4B">Dịch sang English</button>
           <div class="translated-query-row" ${stage.translatedQuery ? '' : 'hidden'}><strong>English:</strong> <span class="translated-query-text"></span></div>
         </label>
 
