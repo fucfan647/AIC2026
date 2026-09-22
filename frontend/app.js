@@ -1,6 +1,7 @@
 const state = {
   searchMode: 'temporal',
   embeddingModel: 'metaclip',
+  autoTranslate: localStorage.getItem('auto_translate_en') === 'true',
   ocrModel: 'monkey',
   queryMode: 'text',
   similarityItem: null,
@@ -111,6 +112,7 @@ const els = {
   resultCount: document.getElementById('resultCount'),
   searchMeta: document.getElementById('searchMeta'),
   embeddingModelToggle: document.getElementById('embeddingModelToggle'),
+  autoTranslateToggle: document.getElementById('autoTranslateToggle'),
 
   searchTimingBtn: document.getElementById('searchTimingBtn'),
   selectedFrames: document.getElementById('selectedFrames'),
@@ -868,7 +870,6 @@ function renderStages() {
         <label class="text-query-field">
           <span class="query-field-heading"><b class="query-field-icon" aria-hidden="true">${stageLetter(index)}</b>Text Query</span>
           <textarea class="text-query" placeholder="Mô tả hành động ${stageLetter(index)}..."></textarea>
-          <button class="translate-query-btn" type="button" data-translate-query title="Dịch Text Query sang tiếng Anh bằng Qwen 3.5-4B">Dịch sang English</button>
           <div class="translated-query-row" ${stage.translatedQuery ? '' : 'hidden'}><strong>English:</strong> <span class="translated-query-text"></span></div>
         </label>
 
@@ -888,7 +889,7 @@ function renderStages() {
 
         <small class="fusion-weight-summary"></small>
 
-        ${isCompletedTemporalStage ? `<button class="translate-query-btn" type="button" data-temporal-search-stage="${index}">Tìm lại Query ${stageLetter(index)}</button>` : ''}
+        ${isCompletedTemporalStage ? `<button class="stage-temporal-rerun-btn" type="button" data-temporal-search-stage="${index}">Tìm lại Query ${stageLetter(index)}</button>` : ''}
       </div>`;
 
     const textarea = card.querySelector('.text-query');
@@ -912,10 +913,6 @@ function renderStages() {
 
     const translatedText = card.querySelector('.translated-query-text');
     if (translatedText) translatedText.textContent = stage.translatedQuery || '';
-    card.querySelector('[data-translate-query]')?.addEventListener('click', event => {
-      event.preventDefault();
-      translateQueryInput(event.currentTarget, stage);
-    });
 
     if (isCompletedTemporalStage) {
       const stageHead = card.querySelector('.stage-head');
@@ -1182,31 +1179,16 @@ function showStageTranslation(stage, translation) {
   if (translatedRow) translatedRow.hidden = false;
 }
 
-async function translateQueryInput(button, stage) {
-  const field = button.closest('.text-query-field');
-  const textarea = field?.querySelector('.text-query');
-  const source = textarea?.value.trim() || '';
-  if (!textarea || !source) {
-    showError('Nhập Text Query trước khi dịch.');
-    textarea?.focus();
-    return;
-  }
-
-  button.disabled = true;
-  const originalLabel = button.textContent;
-  button.textContent = 'Đang dịch…';
-  showError('');
-  try {
-    const {translation, latencyMs} = await requestEnglishTranslation(source);
-    showStageTranslation(stage, translation);
-    setStatus(`Đã dịch bằng HPLT (${latencyMs.toFixed(0)} ms)`, 'ok');
-  } catch (error) {
-    showError(`Dịch query thất bại: ${error.message || error}`);
-    setStatus('Dịch thất bại', 'error');
-  } finally {
-    button.disabled = false;
-    button.textContent = originalLabel;
-  }
+function syncAutoTranslateControl() {
+  if (!els.autoTranslateToggle) return;
+  const active = Boolean(state.autoTranslate);
+  els.autoTranslateToggle.dataset.active = active ? 'true' : 'false';
+  els.autoTranslateToggle.textContent = active ? 'Dịch EN: BẬT' : 'Dịch EN: TẮT';
+  els.autoTranslateToggle.title = active
+    ? 'Đang BẬT tự động dịch sang tiếng Anh khi tìm kiếm. Bấm để TẮT.'
+    : 'Đang TẮT tự động dịch. Bấm để BẬT.';
+  els.autoTranslateToggle.setAttribute('aria-label', `Chế độ tự động dịch tiếng Anh ${active ? 'BẬT' : 'TẮT'}`);
+  els.autoTranslateToggle.classList.toggle('is-active', active);
 }
 
 function collectOcrQueries() {
@@ -4198,7 +4180,7 @@ async function performSearch(requestedTemporalStageIndex = null, translatedQuery
     showError('Hãy sửa Query A, B hoặc C rồi bấm nút tìm lại của stage đó.');
     return;
   }
-  if (state.embeddingModel === 'beit3' && !translatedQueryOverride) {
+  if (state.autoTranslate && !translatedQueryOverride) {
     const indexesToTranslate = temporal
       ? [temporalStageIndex]
       : originalQueries.map((_, index) => index);
@@ -4206,21 +4188,21 @@ async function performSearch(requestedTemporalStageIndex = null, translatedQuery
       for (const index of indexesToTranslate) {
         const source = originalQueries[index] || '';
         const stage = state.stages[index];
-        if (!stage || !looksLikeVietnameseQuery(source) || stage.translatedQuery) continue;
+        if (!stage || !source.trim() || stage.translatedQuery) continue;
         showError('');
-        setStatus(`Đang dịch Query ${stageLetter(index)} sang tiếng Anh cho BEiT-3…`, 'searching');
+        setStatus(`Đang dịch Query ${stageLetter(index)} sang tiếng Anh bằng Qwen…`, 'searching');
         const {translation} = await requestEnglishTranslation(source);
         showStageTranslation(stage, translation);
       }
     } catch (error) {
-      showError(`BEiT-3 cần query tiếng Anh nhưng dịch tự động thất bại: ${error.message || error}`);
+      showError(`Dịch tự động sang tiếng Anh thất bại: ${error.message || error}`);
       setStatus('Dịch tự động thất bại', 'error');
       return;
     }
   }
-  const queries = originalQueries.map((query, index) => state.stages[index]?.translatedQuery || query);
+  const queries = originalQueries.map((query, index) => (state.autoTranslate && state.stages[index]?.translatedQuery) ? state.stages[index].translatedQuery : query);
   const temporalOriginalQuery = temporal ? (originalQueries[temporalStageIndex] || '') : '';
-  const temporalQuery = temporal ? (translatedQueryOverride || state.stages[temporalStageIndex]?.translatedQuery || temporalOriginalQuery) : '';
+  const temporalQuery = temporal ? (translatedQueryOverride || ((state.autoTranslate && state.stages[temporalStageIndex]?.translatedQuery) ? state.stages[temporalStageIndex].translatedQuery : temporalOriginalQuery)) : '';
   const temporalOcrQuery = temporal ? (ocrQueries[temporalStageIndex] || '') : '';
   const temporalAsrQuery = temporal ? (asrQueries[temporalStageIndex] || '') : '';
   const enteredQuery = translatedQueryOverride || queries[0] || '';
@@ -4593,6 +4575,20 @@ els.embeddingModelToggle.addEventListener('click', async () => {
     setStatus(state.backend ? 'Đã kết nối' : 'Sẵn sàng.', state.backend ? 'ok' : 'neutral');
   }
   syncEmbeddingModelControls();
+});
+els.autoTranslateToggle?.addEventListener('click', () => {
+  state.autoTranslate = !state.autoTranslate;
+  localStorage.setItem('auto_translate_en', state.autoTranslate ? 'true' : 'false');
+  if (!state.autoTranslate) {
+    state.stages.forEach(stage => {
+      stage.translatedQuery = '';
+    });
+    document.querySelectorAll('.translated-query-row').forEach(row => {
+      row.hidden = true;
+    });
+  }
+  syncAutoTranslateControl();
+  setLog(`Đã chuyển chế độ dịch tiếng Anh sang: ${state.autoTranslate ? 'BẬT' : 'TẮT'}`);
 });
 
 els.stageList.addEventListener('keydown', event => {
@@ -5003,6 +4999,7 @@ document.addEventListener('keydown', event => {
 renderStages();
 syncSearchModeControls();
 syncEmbeddingModelControls();
+syncAutoTranslateControl();
 syncFusionWeights();
 renderResults();
 renderSelection();
