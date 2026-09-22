@@ -151,8 +151,9 @@
                   <button id="videoSubmitCurrentBtn" class="video-submit-current-btn" type="button" title="Submit frame đang hiển thị lên DRES" aria-label="Submit frame đang hiển thị lên DRES"><i data-lucide="send"></i></button>
                 </div>
                 <div class="video-btn-group">
-                  <button id="expandShotContextBtn" class="video-context-btn" type="button" title="Xem toàn bộ 24 shot lân cận" disabled><i data-lucide="gallery-horizontal-end"></i>24 shot</button>
-                  <button id="expandFrameContextBtn" class="video-context-btn" type="button" title="Xem 48 frame lân cận frame đang hiển thị"><i data-lucide="images"></i>48 frame</button>
+                  <button id="videoTextToggleBtn" class="video-context-btn video-text-toggle-btn" type="button" title="Hiện hoặc ẩn ASR tại thời điểm video đang phát" aria-pressed="false"><i data-lucide="mic"></i>ASR</button>
+                  <button id="expandShotContextBtn" class="video-context-btn" type="button" title="Xem toàn bộ 24 shot lân cận" disabled hidden style="display: none !important;"><i data-lucide="gallery-horizontal-end"></i>24 shot</button>
+                  <button id="expandFrameContextBtn" class="video-context-btn" type="button" title="Xem 48 frame lân cận frame đang hiển thị" hidden style="display: none !important;"><i data-lucide="images"></i>48 frame</button>
                 </div>
                 <div class="video-btn-group">
                   <div id="videoSpeedControl" class="video-popover-control">
