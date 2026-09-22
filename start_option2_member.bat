@@ -47,10 +47,7 @@ if errorlevel 1 (
     pip install fastapi uvicorn websockets httpx
 )
 
-if "%ENABLE_TRANSLATOR%"=="0" (
-    echo [3/3] Model dịch: ĐÃ TẮT (Chạy chế độ tìm kiếm trực tiếp, không mở SSH tunnel).
-    goto TRANSLATOR_TUNNEL_DONE
-)
+if "%ENABLE_TRANSLATOR%"=="0" goto TRANSLATOR_DISABLED
 
 echo [3/3] Kiểm tra kết nối model dịch...
 powershell -NoProfile -Command "try { $r = Invoke-RestMethod -Uri 'http://127.0.0.1:8032/health' -TimeoutSec 2; if ($r.status -eq 'ok') { exit 0 } } catch {}; exit 1" >nul 2>&1
@@ -58,7 +55,7 @@ if not errorlevel 1 goto TRANSLATOR_TUNNEL_READY
 
 echo [THÔNG BÁO] Đang mở SSH tunnel cổng 8032...
 echo [THÔNG BÁO] Hãy nhập mật khẩu SSH trong cửa sổ Translator Tunnel vừa mở (hoặc đóng cửa sổ nếu không có tài khoản).
-start "AIC2026 Translator Tunnel" cmd.exe /k ""%~dp0start_translator_tunnel.bat""
+start "AIC2026 Translator Tunnel" cmd.exe /k "%~dp0start_translator_tunnel.bat"
 
 set /a TRANSLATOR_WAIT_SECONDS=0
 :WAIT_TRANSLATOR_TUNNEL
@@ -69,6 +66,10 @@ set /a TRANSLATOR_WAIT_SECONDS+=1
 if %TRANSLATOR_WAIT_SECONDS% LSS 5 goto WAIT_TRANSLATOR_TUNNEL
 echo [CẢNH BÁO] Không thể kết nối model dịch sau 5 giây (có thể do từ chối quyền SSH hoặc server chưa bật).
 echo [THÔNG BÁO] Hệ thống vẫn tiếp tục khởi chạy giao diện tìm kiếm bình thường...
+goto TRANSLATOR_TUNNEL_DONE
+
+:TRANSLATOR_DISABLED
+echo [3/3] Model dịch: ĐÃ TẮT (Chạy chế độ tìm kiếm trực tiếp, không mở SSH tunnel).
 goto TRANSLATOR_TUNNEL_DONE
 
 :TRANSLATOR_TUNNEL_READY
@@ -84,6 +85,10 @@ echo  - Nhập tên của bạn ở góc trên giao diện và bắt đầu tìm
 echo =====================================================================
 echo.
 
-python frontend\serve_frontend.py --host 127.0.0.1 --port 8081 --backend-url %BACKEND_URL% --team-hub-url %TEAM_HUB_URL% --hls-server-url %HLS_SERVER_URL% --keyframes-dir "%KEYFRAMES_DIR%" --records-path "%RECORDS_PATH%" --asr-index "%ASR_INDEX%"
+python "frontend\serve_frontend.py" --host 127.0.0.1 --port 8081 --backend-url %BACKEND_URL% --team-hub-url %TEAM_HUB_URL% --hls-server-url %HLS_SERVER_URL% --keyframes-dir "%KEYFRAMES_DIR%" --records-path "%RECORDS_PATH%" --asr-index "%ASR_INDEX%"
 
+echo.
+echo =====================================================================
+echo [THÔNG BÁO] Hệ thống đã dừng lại. Mã thoát: %ERRORLEVEL%
+echo =====================================================================
 pause
