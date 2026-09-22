@@ -646,7 +646,7 @@ def create_app(
         team_hub_url = os.getenv("TEAM_HUB_URL", "").strip()
     team_hub_url = team_hub_url.rstrip("/")
 
-    translator_url = os.getenv("TRANSLATOR_URL", "http://127.0.0.1:8032")
+    translator_url = os.getenv("TRANSLATOR_URL", "http://127.0.0.1:8031")
     asr_index_path = Path(asr_index_path or DEFAULT_ASR_INDEX).resolve()
     video_path_by_id: Dict[str, str] = {}
     shot_frames_by_video: Dict[str, List[Dict[str, Any]]] = {}
