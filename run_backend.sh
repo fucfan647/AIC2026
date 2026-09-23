@@ -36,6 +36,7 @@ PORT="${PORT:-8036}"
 
 # 4. Process Name Mask for nvitop & nvidia-smi
 export PROC_TITLE="${PROC_TITLE:-aic_system}"
+export AIC_KEYFRAMES_ROOT="${AIC_KEYFRAMES_ROOT:-/GuestShare_NAS/WorkingSpace/Personal/nghiadq/synthetic_frames}"
 
 # 5. Model & Index Artifact Paths
 RECORDS_DB="artifacts/current_index/records.sqlite"

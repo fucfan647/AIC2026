@@ -8,8 +8,18 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 # Support AIC_KEYFRAMES_ROOT, Windows path, and Linux NAS path fallback
 _nas_frames = Path("/GuestShare_NAS/WorkingSpace/Personal/nghiadq/synthetic_frames")
 _default_cand = PROJECT_ROOT.parent.parent / "data" / "synthetic_frames"
-if not _default_cand.exists() and _nas_frames.exists():
+
+
+def _has_items(p: Path) -> bool:
+    try:
+        return p.is_dir() and any(p.iterdir())
+    except Exception:
+        return False
+
+
+if (not _default_cand.exists() or not _has_items(_default_cand)) and _nas_frames.exists():
     _default_cand = _nas_frames
+
 
 _raw_keyframes = os.getenv("AIC_KEYFRAMES_ROOT", os.getenv("FRAMES_ROOT", str(_default_cand)))
 WEBP_FRAMES_ROOT = Path(_raw_keyframes).expanduser().resolve()
