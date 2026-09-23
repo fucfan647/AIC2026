@@ -349,6 +349,23 @@ document.addEventListener('keydown', event => {
       setTaskType('qa');
       return;
     }
+    if (key === 'e') {
+      event.preventDefault();
+      state.autoTranslate = !state.autoTranslate;
+      try {
+        localStorage.setItem('aic_auto_translate', String(state.autoTranslate));
+      } catch (_) {}
+      if (typeof syncAutoTranslateControls === 'function') {
+        syncAutoTranslateControls();
+      }
+      setStatus(
+        state.autoTranslate
+          ? 'Đã BẬT tự động dịch tiếng Anh (Alt+E).'
+          : 'Đã TẮT tự động dịch tiếng Anh (Alt+E).',
+        'ok'
+      );
+      return;
+    }
   }
 
   if (inInput) return;

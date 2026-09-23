@@ -208,8 +208,8 @@ export class TopbarController {
       this.els.autoTranslateToggle.classList.toggle('is-active', enabled);
       this.els.autoTranslateToggle.setAttribute('aria-pressed', enabled ? 'true' : 'false');
       this.els.autoTranslateToggle.title = enabled
-        ? 'Auto Dịch tiếng Anh đang BẬT. Bấm để tắt.'
-        : 'Auto Dịch tiếng Anh đang TẮT. Bấm để bật tự động dịch câu query tiếng Việt sang tiếng Anh trước khi tìm kiếm.';
+        ? 'Auto Dịch tiếng Anh đang BẬT (Phím tắt: Alt+E). Bấm để tắt.'
+        : 'Auto Dịch tiếng Anh đang TẮT (Phím tắt: Alt+E). Bấm để bật tự động dịch câu query tiếng Việt sang tiếng Anh trước khi tìm kiếm.';
     }
     if (this.els.autoTranslateLabel) {
       this.els.autoTranslateLabel.textContent = enabled ? 'Auto EN: BẬT' : 'Auto EN: Tắt';

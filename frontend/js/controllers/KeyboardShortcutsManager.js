@@ -74,6 +74,11 @@ export class KeyboardShortcutsManager {
         this.topbar.setTaskType(TASK_TYPES.QA);
         return;
       }
+      if (key === 'e') {
+        event.preventDefault();
+        this.topbar.toggleAutoTranslate();
+        return;
+      }
     }
 
     // 3. Phím Escape: đóng mọi modal và celebration

@@ -1263,8 +1263,8 @@ function syncAutoTranslateControls() {
     els.autoTranslateToggle.classList.toggle('is-active', enabled);
     els.autoTranslateToggle.setAttribute('aria-pressed', enabled ? 'true' : 'false');
     els.autoTranslateToggle.title = enabled
-      ? 'Auto Dịch tiếng Anh đang BẬT (tự động dịch query trước khi tìm kiếm). Bấm để tắt.'
-      : 'Auto Dịch tiếng Anh đang TẮT. Bấm để bật tự động dịch câu query tiếng Việt sang tiếng Anh trước khi tìm kiếm.';
+      ? 'Auto Dịch tiếng Anh đang BẬT (Phím tắt: Alt+E). Bấm để tắt.'
+      : 'Auto Dịch tiếng Anh đang TẮT (Phím tắt: Alt+E). Bấm để bật tự động dịch câu query tiếng Việt sang tiếng Anh trước khi tìm kiếm.';
   }
   if (els.autoTranslateLabel) {
     els.autoTranslateLabel.textContent = enabled ? 'Auto EN: BẬT' : 'Auto EN: Tắt';
@@ -4820,6 +4820,21 @@ document.addEventListener('keydown', event => {
     if (key === '3' || key === 'q') {
       event.preventDefault();
       setTaskType('qa');
+      return;
+    }
+    if (key === 'e') {
+      event.preventDefault();
+      state.autoTranslate = !state.autoTranslate;
+      try {
+        localStorage.setItem('aic_auto_translate', String(state.autoTranslate));
+      } catch (_) {}
+      syncAutoTranslateControls();
+      setStatus(
+        state.autoTranslate
+          ? 'Đã BẬT tự động dịch tiếng Anh (Alt+E).'
+          : 'Đã TẮT tự động dịch tiếng Anh (Alt+E).',
+        'ok'
+      );
       return;
     }
   }
