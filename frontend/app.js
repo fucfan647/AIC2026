@@ -9,7 +9,7 @@ const state = {
   asrWeight: 20,
   asrOnly: false,
   autoTranslate: typeof localStorage !== 'undefined' ? localStorage.getItem('aic_auto_translate') === 'true' : false,
-  stages: [{id: 1, name: 'Hành động A', query: '', translatedQuery: '', ocrQuery: '', asrQuery: '', ocrWeight: 41, asrWeight: 20}],
+  stages: [{id: 1, name: 'Hành động A', query: '', translatedQuery: '', ocrQuery: '', asrQuery: '', ocrWeight: 41, asrWeight: 20, isCompleted: false, temporalExpanded: true}],
   temporalSessionId: null,
   temporalStage: 0,
   results: [],
@@ -868,7 +868,7 @@ function renderStages() {
   els.stageList.innerHTML = '';
   state.stages.forEach((stage, index) => {
     const stageNumber = index + 1;
-    const isCompletedTemporalStage = index < state.temporalStage;
+    const isCompletedTemporalStage = Boolean(stage.isCompleted);
     const stageOcrPercent = normalizeOcrPercent(stage.ocrWeight, 41);
     const stageAsrPercent = normalizeAsrPercent(stage.asrWeight, 20);
     const card = document.createElement('section');
@@ -1089,18 +1089,25 @@ function invalidateTemporalResults() {
 }
 
 function addTemporalStage() {
-  if (state.stages.length >= 5) return;
+  if (state.stages.length >= 5) {
+    setStatus('Đã đạt giới hạn tối đa 5 Stage.', 'warning');
+    return;
+  }
   
-  const textFields = document.querySelectorAll('.text-query');
-  const ocrFields = document.querySelectorAll('.stage-ocr-query');
-  const asrFields = document.querySelectorAll('.stage-asr-query');
-  const currentStageIndex = state.stages.length - 1;
-  
-  const hasContent = textFields[currentStageIndex]?.value?.trim() 
-    || ocrFields[currentStageIndex]?.value?.trim() 
-    || asrFields[currentStageIndex]?.value?.trim();
+  // Nếu stage cuối cùng hiện tại vẫn đang trống và chưa được tìm kiếm, mở rộng và focus vào nó
+  const lastStage = state.stages[state.stages.length - 1];
+  const lastHasContent = Boolean(
+    String(lastStage?.query || '').trim() ||
+    String(lastStage?.ocrQuery || '').trim() ||
+    String(lastStage?.asrQuery || '').trim()
+  );
+  if (lastStage && !lastStage.isCompleted && !lastHasContent) {
+    lastStage.temporalExpanded = true;
+    renderStages();
+    els.stageList.querySelector('.stage-card:last-child .text-query')?.focus();
+    return;
+  }
 
-  // Luôn tạo trước stage mới để hệ thống biết đang ở chế độ temporal (cần > 1 stage)
   const nextIndex = state.stages.length;
   state.searchMode = 'temporal';
   state.queryMode = 'text';
@@ -1119,29 +1126,45 @@ function addTemporalStage() {
     asrWeight: normalizeAsrPercent(
       state.stages[state.stages.length - 1]?.asrWeight,
       20
-    )
+    ),
+    isCompleted: false,
+    temporalExpanded: true
   });
 
-  // Render UI ngay lập tức để người dùng thấy Tab B được thêm vào
-  invalidateTemporalResults();
+  // GIỮ NGUYÊN kết quả tìm kiếm hiện tại (KHÔNG gọi invalidateTemporalResults())
   renderStages();
   syncSearchModeControls();
   els.stageList.querySelector('.stage-card:last-child .text-query')?.focus();
-
-  // Nếu người dùng đang ở một stage chưa search và có nhập liệu, tự động search stage vừa điền
-  if (currentStageIndex === state.temporalStage && hasContent) {
-    // Gọi search cho stage trước đó. 
-    performSearch(state.temporalStage);
-  }
+  setStatus(`Đã thêm Stage ${stageLetter(nextIndex)} (Alt+A)`, 'ok');
 }
 
 function removeStage(stageId) {
   if (state.stages.length <= 1) return;
+  const removedIndex = state.stages.findIndex(stage => stage.id === stageId);
+  const wasCompleted = Boolean(state.stages[removedIndex]?.isCompleted);
   state.stages = state.stages.filter(stage => stage.id !== stageId);
-  state.searchMode = 'temporal';
-  invalidateTemporalResults();
+  
+  if (state.stages.length <= 1) {
+    state.searchMode = 'single';
+  } else {
+    state.searchMode = 'temporal';
+  }
+
+  state.stages.forEach((stage, idx) => {
+    stage.name = `Hành động ${stageLetter(idx)}`;
+  });
+
+  const completedCount = state.stages.filter(stage => stage.isCompleted).length;
+  state.temporalStage = completedCount;
+
+  // Chỉ xóa kết quả nếu không còn stage nào hoàn thành
+  if (completedCount === 0 && wasCompleted) {
+    invalidateTemporalResults();
+  }
+
   renderStages();
   syncSearchModeControls();
+  setStatus('Đã xóa Stage (Alt+D)', 'ok');
 }
 
 function collectQueries() {
@@ -4272,7 +4295,14 @@ async function performSearch(requestedTemporalStageIndex = null, translatedQuery
       state.temporalSessionId = payload.session_id;
       state.temporalStage = Number(payload.stage || 0);
       if (state.stages[temporalStageIndex]) {
+        state.stages[temporalStageIndex].isCompleted = true;
         state.stages[temporalStageIndex].temporalExpanded = false;
+      }
+      // Nếu là action 'start' (tìm lại từ đầu Stage A), hủy trạng thái completed của các stage phía sau
+      if (temporalStageIndex === 0) {
+        for (let i = 1; i < state.stages.length; i++) {
+          state.stages[i].isCompleted = false;
+        }
       }
       if (state.temporalStage < 3 && state.stages.length === state.temporalStage) {
         const nextIndex = state.temporalStage;
@@ -4284,8 +4314,13 @@ async function performSearch(requestedTemporalStageIndex = null, translatedQuery
           ocrQuery: '',
           asrQuery: '',
           ocrWeight: 0,
-          asrWeight: 0
+          asrWeight: 0,
+          isCompleted: false,
+          temporalExpanded: true
         });
+      }
+      if (state.stages[state.temporalStage]) {
+        state.stages[state.temporalStage].temporalExpanded = true;
       }
     }
     const backendResults = temporal
@@ -4396,7 +4431,7 @@ function resetWorkspace() {
   }
   state.temporalSessionId = null;
   state.temporalStage = 0;
-  state.stages = [{id: Date.now(), name: 'Hành động A', query: '', translatedQuery: '', ocrQuery: '', asrQuery: '', ocrWeight: 41, asrWeight: 20}];
+  state.stages = [{id: Date.now(), name: 'Hành động A', query: '', translatedQuery: '', ocrQuery: '', asrQuery: '', ocrWeight: 41, asrWeight: 20, isCompleted: false, temporalExpanded: true}];
   state.results = [];
   hideCorrectCelebration();
   clearSubmissionFeedback();
@@ -4435,7 +4470,8 @@ async function resetTemporalSearch() {
     state.temporalSessionId = null;
     state.temporalStage = 0;
     state.stages = state.stages.slice(0, 1);
-    state.stages[0].temporalExpanded = false;
+    state.stages[0].isCompleted = false;
+    state.stages[0].temporalExpanded = true;
     invalidateTemporalResults();
     renderStages();
     syncSearchModeControls();

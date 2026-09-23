@@ -17,7 +17,7 @@ const state = {
   asrWeight: 20,
   asrOnly: false,
   autoTranslate: typeof localStorage !== 'undefined' ? localStorage.getItem('aic_auto_translate') === 'true' : false,
-  stages: [{id: 1, name: 'Hành động A', query: '', translatedQuery: '', ocrQuery: '', asrQuery: '', ocrWeight: 41, asrWeight: 20}],
+  stages: [{id: 1, name: 'Hành động A', query: '', translatedQuery: '', ocrQuery: '', asrQuery: '', ocrWeight: 41, asrWeight: 20, isCompleted: false, temporalExpanded: true}],
   temporalSessionId: null,
   temporalStage: 0,
   results: [],

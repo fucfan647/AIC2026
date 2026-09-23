@@ -58,6 +58,25 @@ export class StageManager {
 
   addTemporalStage() {
     const stages = [...this.state.get('stages')];
+    if (stages.length >= 5) return;
+
+    const lastStage = stages[stages.length - 1];
+    const lastHasContent = Boolean(
+      String(lastStage?.query || '').trim() ||
+      String(lastStage?.ocrQuery || '').trim() ||
+      String(lastStage?.asrQuery || '').trim()
+    );
+    if (lastStage && !lastStage.isCompleted && !lastHasContent) {
+      lastStage.temporalExpanded = true;
+      this.state.set('stages', stages);
+      this.render();
+      setTimeout(() => {
+        const card = this.els.stageList?.querySelector(`.stage-card[data-stage-id="${lastStage.id}"] .text-query`);
+        card?.focus();
+      }, 50);
+      return;
+    }
+
     const nextIndex = stages.length;
     const nextLetter = this.state.stageLetter(nextIndex);
     const newStage = {
@@ -68,7 +87,9 @@ export class StageManager {
       ocrQuery: '',
       asrQuery: '',
       ocrWeight: 41,
-      asrWeight: 20
+      asrWeight: 20,
+      isCompleted: false,
+      temporalExpanded: true
     };
     stages.push(newStage);
     this.state.set('stages', stages);
@@ -84,6 +105,9 @@ export class StageManager {
     let stages = [...this.state.get('stages')];
     if (stages.length <= 1) return;
     stages = stages.filter(s => s.id !== stageId);
+    stages.forEach((stage, idx) => {
+      stage.name = `Hành động ${this.state.stageLetter(idx)}`;
+    });
     this.state.set('stages', stages);
     this.render();
   }

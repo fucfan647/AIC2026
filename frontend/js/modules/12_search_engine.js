@@ -238,7 +238,14 @@ async function performSearch(requestedTemporalStageIndex = null, translatedQuery
       state.temporalSessionId = payload.session_id;
       state.temporalStage = Number(payload.stage || 0);
       if (state.stages[temporalStageIndex]) {
+        state.stages[temporalStageIndex].isCompleted = true;
         state.stages[temporalStageIndex].temporalExpanded = false;
+      }
+      // Nếu là action 'start' (tìm lại từ đầu Stage A), hủy trạng thái completed của các stage phía sau
+      if (temporalStageIndex === 0) {
+        for (let i = 1; i < state.stages.length; i++) {
+          state.stages[i].isCompleted = false;
+        }
       }
       if (state.temporalStage < 3 && state.stages.length === state.temporalStage) {
         const nextIndex = state.temporalStage;
@@ -250,8 +257,13 @@ async function performSearch(requestedTemporalStageIndex = null, translatedQuery
           ocrQuery: '',
           asrQuery: '',
           ocrWeight: 0,
-          asrWeight: 0
+          asrWeight: 0,
+          isCompleted: false,
+          temporalExpanded: true
         });
+      }
+      if (state.stages[state.temporalStage]) {
+        state.stages[state.temporalStage].temporalExpanded = true;
       }
     }
     const backendResults = temporal
