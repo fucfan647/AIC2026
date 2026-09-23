@@ -30,7 +30,7 @@ class MetaClip2Config:
 class MetaClip2Embedder:
     def __init__(self, config: MetaClip2Config):
         try:
-            from transformers import AutoModel, AutoProcessor
+            from transformers import AutoModel, AutoTokenizer
             import torch
         except Exception as exc:
             raise RuntimeError("torch and transformers are required for MetaCLIP-2 search") from exc
@@ -40,7 +40,10 @@ class MetaClip2Embedder:
         torch_dtype = torch.float16 if config.dtype == "float16" and config.device.startswith("cuda") else torch.float32
         print(f"[embedder] loading processor: {config.model_name}", flush=True)
         started = time.time()
-        self.processor = AutoProcessor.from_pretrained(
+        # Retrieval only encodes text. Loading AutoProcessor on MetaCLIP-2
+        # misclassifies its XLM-R tokenizer as CLIPTokenizer in some
+        # transformers releases; AutoTokenizer selects XLMRoberta correctly.
+        self.processor = AutoTokenizer.from_pretrained(
             config.model_name,
             local_files_only=config.local_files_only,
             trust_remote_code=True,

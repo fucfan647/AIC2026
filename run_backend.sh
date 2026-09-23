@@ -13,6 +13,9 @@ cd "$BACKEND_DIR"
 # 1. Select Python Interpreter
 if [ -n "$PYTHON" ]; then
     PY_BIN="$PYTHON"
+elif [ -x "/home/nghiadq/miniconda3/envs/metaclip2/bin/python" ]; then
+    # Local-disk runtime avoids slow and unstable imports from the NAS env.
+    PY_BIN="/home/nghiadq/miniconda3/envs/metaclip2/bin/python"
 elif [ -f "/GuestShare_NAS/WorkingSpace/Personal/nghiadq/miniconda3/envs/sal/bin/python" ]; then
     PY_BIN="/GuestShare_NAS/WorkingSpace/Personal/nghiadq/miniconda3/envs/sal/bin/python"
 elif [ -f "$BACKEND_DIR/.venv/bin/python" ]; then
