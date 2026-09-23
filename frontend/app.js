@@ -883,7 +883,6 @@ function renderStages() {
         <label class="text-query-field">
           <span class="query-field-heading"><b class="query-field-icon" aria-hidden="true">${stageLetter(index)}</b>Text Query</span>
           <textarea class="text-query" placeholder="Mô tả hành động ${stageLetter(index)}..."></textarea>
-          <button class="translate-query-btn" type="button" data-translate-query title="Dịch Text Query sang tiếng Anh bằng HPLT">Dịch sang English</button>
           <div class="translated-query-row" ${stage.translatedQuery ? '' : 'hidden'}><strong>English:</strong> <span class="translated-query-text"></span></div>
         </label>
 
@@ -928,10 +927,6 @@ function renderStages() {
 
     const translatedText = card.querySelector('.translated-query-text');
     if (translatedText) translatedText.textContent = stage.translatedQuery || '';
-    card.querySelector('[data-translate-query]')?.addEventListener('click', event => {
-      event.preventDefault();
-      translateQueryInput(event.currentTarget, stage);
-    });
 
     if (isCompletedTemporalStage) {
       const stageHead = card.querySelector('.stage-head');
@@ -1192,33 +1187,6 @@ function showStageTranslation(stage, translation) {
   const translatedText = card?.querySelector('.translated-query-text');
   if (translatedText) translatedText.textContent = translation;
   if (translatedRow) translatedRow.hidden = false;
-}
-
-async function translateQueryInput(button, stage) {
-  const field = button.closest('.text-query-field');
-  const textarea = field?.querySelector('.text-query');
-  const source = textarea?.value.trim() || '';
-  if (!textarea || !source) {
-    showError('Nhập Text Query trước khi dịch.');
-    textarea?.focus();
-    return;
-  }
-
-  button.disabled = true;
-  const originalLabel = button.textContent;
-  button.textContent = 'Đang dịch…';
-  showError('');
-  try {
-    const {translation, latencyMs} = await requestEnglishTranslation(source);
-    showStageTranslation(stage, translation);
-    setStatus(`Đã dịch bằng HPLT (${latencyMs.toFixed(0)} ms)`, 'ok');
-  } catch (error) {
-    showError(`Dịch query thất bại: ${error.message || error}`);
-    setStatus('Dịch thất bại', 'error');
-  } finally {
-    button.disabled = false;
-    button.textContent = originalLabel;
-  }
 }
 
 function collectOcrQueries() {

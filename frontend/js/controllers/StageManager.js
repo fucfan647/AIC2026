@@ -88,33 +88,6 @@ export class StageManager {
     this.render();
   }
 
-  async translateStageInput(stage, card) {
-    const input = card.querySelector('.text-query');
-    const translateBtn = card.querySelector('.translate-btn');
-    const originalText = String(input?.value || '').trim();
-    if (!originalText) return;
-
-    if (translateBtn) {
-      translateBtn.disabled = true;
-      translateBtn.textContent = '...';
-    }
-
-    try {
-      const translated = await this.searchService.translateQuery(originalText);
-      stage.translatedQuery = translated;
-      const preview = card.querySelector('.translation-preview');
-      if (preview) {
-        preview.textContent = translated ? `(EN: ${translated})` : '';
-        preview.hidden = !translated;
-      }
-    } catch (_) {
-    } finally {
-      if (translateBtn) {
-        translateBtn.disabled = false;
-        translateBtn.textContent = 'Dịch';
-      }
-    }
-  }
 
   collectQueries() {
     return this.state.get('stages').map(s => s.query.trim());
@@ -156,7 +129,6 @@ export class StageManager {
           <div class="query-field-wrap">
             <span class="query-field-icon">${textQueryIcon()}</span>
             <input class="text-query" type="text" placeholder="Mô tả hành động ${letter} (Enter để tìm)..." value="${escapeHtml(stage.query || '')}" />
-            <button class="ghost compact translate-btn" type="button" title="Dịch sang tiếng Anh">Dịch</button>
           </div>
           <span class="translation-preview" ${stage.translatedQuery ? '' : 'hidden'}>
             ${stage.translatedQuery ? `(EN: ${escapeHtml(stage.translatedQuery)})` : ''}
@@ -177,9 +149,6 @@ export class StageManager {
       ocrInput.addEventListener('input', () => {
         stage.ocrQuery = ocrInput.value;
       });
-
-      const translateBtn = card.querySelector('.translate-btn');
-      translateBtn.addEventListener('click', () => this.translateStageInput(stage, card));
 
       const removeBtn = card.querySelector('.remove-stage-btn');
       if (removeBtn) {
