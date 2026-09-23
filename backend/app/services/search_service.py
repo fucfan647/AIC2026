@@ -199,7 +199,13 @@ class SearchPipelineService:
             rec = metadata_by_row.get(int(row_id))
             if rec is None:
                 continue
+            timestamp_ms = int(rec.get("timestamp_ms", 0) or 0)
             item = dict(rec)
+            item["rank"] = len(results) + 1
+            item["score"] = float(score)
+            item["timestamp_ms"] = timestamp_ms
+            item["timestamp_seconds"] = round(timestamp_ms / 1000.0, 3)
+            item["source_embedding_row"] = int(row_id)
             item["visual_rank"] = rank
             item["visual_score"] = float(score)
             item["ocr_rank"] = None
@@ -207,8 +213,20 @@ class SearchPipelineService:
             item["ocr_text"] = ""
             item["match_source"] = ["visual"]
             item["fusion_score"] = float(score)
+            if queries:
+                adjacent = search_state.metadata.get_adjacent(int(row_id), str(rec["video_id"]))
+                item["adjacent_frames"] = {
+                    position: {
+                        "keyframe_id": frame["keyframe_id"],
+                        "video_id": frame["video_id"],
+                        "shot_id": frame.get("shot_id"),
+                        "timestamp_ms": int(frame.get("timestamp_ms", 0) or 0),
+                        "timestamp_seconds": round(int(frame.get("timestamp_ms", 0) or 0) / 1000.0, 3),
+                    }
+                    for position, frame in adjacent.items()
+                }
             results.append(item)
-            if 0 < top_k <= len(results):
+            if not use_ocr and top_k > 0 and len(results) >= top_k:
                 break
 
         metadata_ms = (time.perf_counter() - metadata_started) * 1000.0
@@ -217,9 +235,15 @@ class SearchPipelineService:
         if use_ocr_filter:
             fusion_started = time.perf_counter()
             if has_semantic_query:
+                selected_row_ids = {
+                    int(item.get("source_embedding_row", item.get("row_id", 0))) for item in results
+                }
+                ranked_ocr_hits = [
+                    hit for hit in ocr_filter_hits if hit.row_id in selected_row_ids
+                ]
                 results = self.runtime.fuse_ranked_results(
                     results,
-                    ocr_filter_hits,
+                    ranked_ocr_hits,
                     top_k=top_k,
                     visual_weight=0.7,
                     ocr_weight=0.3,
@@ -276,7 +300,7 @@ class SearchPipelineService:
 
         if query_vector is not None:
             for item in results:
-                row_id = int(item["source_embedding_row"])
+                row_id = int(item.get("source_embedding_row", item.get("row_id", 0)))
                 embedding = np.asarray(search_state.embeddings[row_id], dtype=np.float32)
                 item["cosine_similarity"] = float(np.dot(embedding, query_vector))
 
