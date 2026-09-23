@@ -47,6 +47,24 @@ els.embeddingModelToggle.addEventListener('click', async () => {
   syncEmbeddingModelControls();
 });
 
+if (els.autoTranslateToggle) {
+  els.autoTranslateToggle.addEventListener('click', () => {
+    state.autoTranslate = !state.autoTranslate;
+    try {
+      localStorage.setItem('aic_auto_translate', String(state.autoTranslate));
+    } catch (_) {}
+    if (typeof syncAutoTranslateControls === 'function') {
+      syncAutoTranslateControls();
+    }
+    setStatus(
+      state.autoTranslate
+        ? 'Đã BẬT tự động dịch tiếng Anh trước khi tìm kiếm.'
+        : 'Đã TẮT tự động dịch tiếng Anh.',
+      'ok'
+    );
+  });
+}
+
 els.stageList.addEventListener('keydown', event => {
   if (event.target.matches('.text-query, .similarity-query, .stage-asr-query') && event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
     event.preventDefault();

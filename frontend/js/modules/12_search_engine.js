@@ -59,7 +59,8 @@ async function performSearch(requestedTemporalStageIndex = null, translatedQuery
     showError('Hãy sửa Query A, B hoặc C rồi bấm nút tìm lại của stage đó.');
     return;
   }
-  if (state.embeddingModel === 'beit3' && !translatedQueryOverride) {
+  const shouldAutoTranslate = (Boolean(state.autoTranslate) || state.embeddingModel === 'beit3') && !translatedQueryOverride;
+  if (shouldAutoTranslate) {
     const indexesToTranslate = temporal
       ? [temporalStageIndex]
       : originalQueries.map((_, index) => index);
@@ -69,14 +70,19 @@ async function performSearch(requestedTemporalStageIndex = null, translatedQuery
         const stage = state.stages[index];
         if (!stage || !looksLikeVietnameseQuery(source) || stage.translatedQuery) continue;
         showError('');
-        setStatus(`Đang dịch Query ${stageLetter(index)} sang tiếng Anh cho BEiT-3…`, 'searching');
+        const modelLabel = state.embeddingModel === 'beit3' ? 'BEiT-3' : 'Auto EN';
+        setStatus(`Đang dịch Query ${stageLetter(index)} sang tiếng Anh (${modelLabel})…`, 'searching');
         const {translation} = await requestEnglishTranslation(source);
         showStageTranslation(stage, translation);
       }
     } catch (error) {
-      showError(`BEiT-3 cần query tiếng Anh nhưng dịch tự động thất bại: ${error.message || error}`);
-      setStatus('Dịch tự động thất bại', 'error');
-      return;
+      if (state.embeddingModel === 'beit3') {
+        showError(`BEiT-3 cần query tiếng Anh nhưng dịch tự động thất bại: ${error.message || error}`);
+        setStatus('Dịch tự động thất bại', 'error');
+        return;
+      } else {
+        console.warn('Auto translate warning, continuing with original query:', error);
+      }
     }
   }
   const queries = originalQueries.map((query, index) => state.stages[index]?.translatedQuery || query);

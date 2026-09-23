@@ -8,6 +8,7 @@ const state = {
   similarityTextWeight: 30,
   asrWeight: 20,
   asrOnly: false,
+  autoTranslate: typeof localStorage !== 'undefined' ? localStorage.getItem('aic_auto_translate') === 'true' : false,
   stages: [{id: 1, name: 'Hành động A', query: '', translatedQuery: '', ocrQuery: '', asrQuery: '', ocrWeight: 41, asrWeight: 20}],
   temporalSessionId: null,
   temporalStage: 0,
@@ -114,6 +115,8 @@ const els = {
   resultCount: document.getElementById('resultCount'),
   searchMeta: document.getElementById('searchMeta'),
   embeddingModelToggle: document.getElementById('embeddingModelToggle'),
+  autoTranslateToggle: document.getElementById('autoTranslateToggle'),
+  autoTranslateLabel: document.getElementById('autoTranslateLabel'),
 
   searchTimingBtn: document.getElementById('searchTimingBtn'),
   selectedFrames: document.getElementById('selectedFrames'),
@@ -1250,6 +1253,21 @@ function syncEmbeddingModelControls() {
       : 'Đang dùng MetaCLIP-2. Bấm để đổi sang BEiT-3.';
     els.embeddingModelToggle.setAttribute('aria-label', `Mô hình embedding ${isBeit3 ? 'BEiT-3' : 'MetaCLIP-2'}`);
     els.embeddingModelToggle.classList.toggle('is-beit3', isBeit3);
+  }
+  syncAutoTranslateControls();
+}
+
+function syncAutoTranslateControls() {
+  const enabled = Boolean(state.autoTranslate);
+  if (els.autoTranslateToggle) {
+    els.autoTranslateToggle.classList.toggle('is-active', enabled);
+    els.autoTranslateToggle.setAttribute('aria-pressed', enabled ? 'true' : 'false');
+    els.autoTranslateToggle.title = enabled
+      ? 'Auto Dịch tiếng Anh đang BẬT (tự động dịch query trước khi tìm kiếm). Bấm để tắt.'
+      : 'Auto Dịch tiếng Anh đang TẮT. Bấm để bật tự động dịch câu query tiếng Việt sang tiếng Anh trước khi tìm kiếm.';
+  }
+  if (els.autoTranslateLabel) {
+    els.autoTranslateLabel.textContent = enabled ? 'Auto EN: BẬT' : 'Auto EN: Tắt';
   }
 }
 
@@ -4107,7 +4125,8 @@ async function performSearch(requestedTemporalStageIndex = null, translatedQuery
     showError('Hãy sửa Query A, B hoặc C rồi bấm nút tìm lại của stage đó.');
     return;
   }
-  if (state.embeddingModel === 'beit3' && !translatedQueryOverride) {
+  const shouldAutoTranslate = (Boolean(state.autoTranslate) || state.embeddingModel === 'beit3') && !translatedQueryOverride;
+  if (shouldAutoTranslate) {
     const indexesToTranslate = temporal
       ? [temporalStageIndex]
       : originalQueries.map((_, index) => index);
@@ -4117,14 +4136,19 @@ async function performSearch(requestedTemporalStageIndex = null, translatedQuery
         const stage = state.stages[index];
         if (!stage || !looksLikeVietnameseQuery(source) || stage.translatedQuery) continue;
         showError('');
-        setStatus(`Đang dịch Query ${stageLetter(index)} sang tiếng Anh cho BEiT-3…`, 'searching');
+        const modelLabel = state.embeddingModel === 'beit3' ? 'BEiT-3' : 'Auto EN';
+        setStatus(`Đang dịch Query ${stageLetter(index)} sang tiếng Anh (${modelLabel})…`, 'searching');
         const {translation} = await requestEnglishTranslation(source);
         showStageTranslation(stage, translation);
       }
     } catch (error) {
-      showError(`BEiT-3 cần query tiếng Anh nhưng dịch tự động thất bại: ${error.message || error}`);
-      setStatus('Dịch tự động thất bại', 'error');
-      return;
+      if (state.embeddingModel === 'beit3') {
+        showError(`BEiT-3 cần query tiếng Anh nhưng dịch tự động thất bại: ${error.message || error}`);
+        setStatus('Dịch tự động thất bại', 'error');
+        return;
+      } else {
+        console.warn('Auto translate warning, continuing with original query:', error);
+      }
     }
   }
   const queries = originalQueries.map((query, index) => state.stages[index]?.translatedQuery || query);
@@ -4503,6 +4527,22 @@ els.embeddingModelToggle.addEventListener('click', async () => {
   }
   syncEmbeddingModelControls();
 });
+
+if (els.autoTranslateToggle) {
+  els.autoTranslateToggle.addEventListener('click', () => {
+    state.autoTranslate = !state.autoTranslate;
+    try {
+      localStorage.setItem('aic_auto_translate', String(state.autoTranslate));
+    } catch (_) {}
+    syncAutoTranslateControls();
+    setStatus(
+      state.autoTranslate
+        ? 'Đã BẬT tự động dịch tiếng Anh trước khi tìm kiếm.'
+        : 'Đã TẮT tự động dịch tiếng Anh.',
+      'ok'
+    );
+  });
+}
 
 els.stageList.addEventListener('keydown', event => {
   if (event.target.matches('.text-query, .similarity-query, .stage-asr-query') && event.key === 'Enter' && !event.shiftKey && !event.isComposing) {

@@ -49,6 +49,12 @@
         <div class="search-mode-control embedding-model-control" aria-label="Mô hình tìm kiếm">
           <button id="embeddingModelToggle" class="is-active" type="button" aria-label="Mô hình hiện tại MetaCLIP-2; bấm để đổi sang BEiT-3">MetaCLIP-2</button>
         </div>
+        <div class="search-mode-control auto-translate-control" aria-label="Tự động dịch sang tiếng Anh">
+          <button id="autoTranslateToggle" class="auto-translate-toggle" type="button" title="Bật/Tắt tự động dịch tiếng Việt sang tiếng Anh trước khi tìm kiếm" aria-pressed="false">
+            <span class="auto-translate-icon">🌐</span>
+            <span id="autoTranslateLabel">Auto EN: Tắt</span>
+          </button>
+        </div>
         <button id="clearBtn" class="ghost" type="button" title="Xóa các frame đã chọn" aria-label="Xóa các frame đã chọn" hidden>Xóa lựa chọn</button>
         <button id="resetBtn" class="ghost" type="button" title="Đặt lại không gian tìm kiếm" aria-label="Đặt lại không gian tìm kiếm" hidden>Đặt lại</button>
         <button id="logOpenBtn" class="status-pill warning" type="button" title="Xem log trạng thái">Đang kết nối</button>

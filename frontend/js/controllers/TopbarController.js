@@ -33,6 +33,8 @@ export class TopbarController {
       submissionModeToggle: document.getElementById('submissionModeToggle'),
       dresOpenBtn: document.getElementById('dresOpenBtn'),
       embeddingModelToggle: document.getElementById('embeddingModelToggle'),
+      autoTranslateToggle: document.getElementById('autoTranslateToggle'),
+      autoTranslateLabel: document.getElementById('autoTranslateLabel'),
       connectionStatus: document.getElementById('logOpenBtn')
     };
 
@@ -104,6 +106,11 @@ export class TopbarController {
     // Embedding model toggle (MetaCLIP-2 vs BEiT-3)
     if (this.els.embeddingModelToggle) {
       this.els.embeddingModelToggle.addEventListener('click', () => this.toggleEmbeddingModel());
+    }
+
+    // Auto translate toggle
+    if (this.els.autoTranslateToggle) {
+      this.els.autoTranslateToggle.addEventListener('click', () => this.toggleAutoTranslate());
     }
 
     // Connection status click -> open log modal
@@ -185,6 +192,30 @@ export class TopbarController {
     this.syncEmbeddingModelControls();
   }
 
+  toggleAutoTranslate() {
+    const current = Boolean(this.state.get('autoTranslate'));
+    const next = !current;
+    this.state.set('autoTranslate', next);
+    try {
+      localStorage.setItem('aic_auto_translate', String(next));
+    } catch (_) {}
+    this.renderAutoTranslate();
+  }
+
+  renderAutoTranslate() {
+    const enabled = Boolean(this.state.get('autoTranslate'));
+    if (this.els.autoTranslateToggle) {
+      this.els.autoTranslateToggle.classList.toggle('is-active', enabled);
+      this.els.autoTranslateToggle.setAttribute('aria-pressed', enabled ? 'true' : 'false');
+      this.els.autoTranslateToggle.title = enabled
+        ? 'Auto Dịch tiếng Anh đang BẬT. Bấm để tắt.'
+        : 'Auto Dịch tiếng Anh đang TẮT. Bấm để bật tự động dịch câu query tiếng Việt sang tiếng Anh trước khi tìm kiếm.';
+    }
+    if (this.els.autoTranslateLabel) {
+      this.els.autoTranslateLabel.textContent = enabled ? 'Auto EN: BẬT' : 'Auto EN: Tắt';
+    }
+  }
+
   syncEmbeddingModelControls() {
     if (!this.els.embeddingModelToggle) return;
     const model = this.state.get('embeddingModel');
@@ -218,6 +249,7 @@ export class TopbarController {
     this.updateMemberNameDisplay();
     this.renderSubmissionMode();
     this.syncEmbeddingModelControls();
+    this.renderAutoTranslate();
     if (this.els.taskType) {
       this.setTaskType(this.els.taskType.value || TASK_TYPES.KIS);
     }

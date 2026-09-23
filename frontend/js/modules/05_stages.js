@@ -419,7 +419,23 @@ function syncEmbeddingModelControls() {
     els.embeddingModelToggle.setAttribute('aria-label', `Mô hình embedding ${isBeit3 ? 'BEiT-3' : 'MetaCLIP-2'}`);
     els.embeddingModelToggle.classList.toggle('is-beit3', isBeit3);
   }
+  syncAutoTranslateControls();
 }
+
+function syncAutoTranslateControls() {
+  const enabled = Boolean(state.autoTranslate);
+  if (els.autoTranslateToggle) {
+    els.autoTranslateToggle.classList.toggle('is-active', enabled);
+    els.autoTranslateToggle.setAttribute('aria-pressed', enabled ? 'true' : 'false');
+    els.autoTranslateToggle.title = enabled
+      ? 'Auto Dịch tiếng Anh đang BẬT (tự động dịch query trước khi tìm kiếm). Bấm để tắt.'
+      : 'Auto Dịch tiếng Anh đang TẮT. Bấm để bật tự động dịch câu query tiếng Việt sang tiếng Anh trước khi tìm kiếm.';
+  }
+  if (els.autoTranslateLabel) {
+    els.autoTranslateLabel.textContent = enabled ? 'Auto EN: BẬT' : 'Auto EN: Tắt';
+  }
+}
+
 
 async function refreshHealth() {
   try {
@@ -567,6 +583,7 @@ if (typeof window !== "undefined") {
   try { window.setSearchMode = setSearchMode; } catch (_) {}
   try { window.syncSearchModeControls = syncSearchModeControls; } catch (_) {}
   try { window.syncEmbeddingModelControls = syncEmbeddingModelControls; } catch (_) {}
+  try { window.syncAutoTranslateControls = syncAutoTranslateControls; } catch (_) {}
   try { window.refreshHealth = refreshHealth; } catch (_) {}
   try { window.sortResults = sortResults; } catch (_) {}
   try { window.groupShotSuggestions = groupShotSuggestions; } catch (_) {}

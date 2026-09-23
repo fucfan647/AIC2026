@@ -16,6 +16,7 @@ const state = {
   similarityTextWeight: 30,
   asrWeight: 20,
   asrOnly: false,
+  autoTranslate: typeof localStorage !== 'undefined' ? localStorage.getItem('aic_auto_translate') === 'true' : false,
   stages: [{id: 1, name: 'Hành động A', query: '', translatedQuery: '', ocrQuery: '', asrQuery: '', ocrWeight: 41, asrWeight: 20}],
   temporalSessionId: null,
   temporalStage: 0,
@@ -122,6 +123,8 @@ const els = {
   resultCount: document.getElementById('resultCount'),
   searchMeta: document.getElementById('searchMeta'),
   embeddingModelToggle: document.getElementById('embeddingModelToggle'),
+  autoTranslateToggle: document.getElementById('autoTranslateToggle'),
+  autoTranslateLabel: document.getElementById('autoTranslateLabel'),
 
   searchTimingBtn: document.getElementById('searchTimingBtn'),
   selectedFrames: document.getElementById('selectedFrames'),
