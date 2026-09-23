@@ -366,6 +366,25 @@ document.addEventListener('keydown', event => {
       );
       return;
     }
+    if (key === 'a') {
+      event.preventDefault();
+      addTemporalStage();
+      setStatus('Đã thêm Stage (Alt+A)', 'ok');
+      return;
+    }
+    if (key === 'd') {
+      event.preventDefault();
+      if (state.stages.length > 1) {
+        removeStage(state.stages[state.stages.length - 1].id);
+        setStatus('Đã xóa Stage cuối (Alt+D)', 'ok');
+      }
+      return;
+    }
+    if (key === 'i') {
+      event.preventDefault();
+      els.globalSimilarityBtn?.click();
+      return;
+    }
   }
 
   if (inInput) return;
@@ -401,24 +420,6 @@ document.addEventListener('keydown', event => {
   if (key === 't') {
     event.preventDefault();
     cycleTaskType();
-    return;
-  }
-  
-  if (key === 'i') {
-    event.preventDefault();
-    els.globalSimilarityBtn.click();
-    return;
-  }
-  if (key === 'a') {
-    event.preventDefault();
-    addTemporalStage();
-    return;
-  }
-  if (key === 'd') {
-    event.preventDefault();
-    if (state.stages.length > 1) {
-      removeStage(state.stages[state.stages.length - 1].id);
-    }
     return;
   }
   if (event.key === '?' || (event.key === '/' && event.shiftKey)) {

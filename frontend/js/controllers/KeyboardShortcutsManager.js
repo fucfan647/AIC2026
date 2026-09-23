@@ -79,6 +79,24 @@ export class KeyboardShortcutsManager {
         this.topbar.toggleAutoTranslate();
         return;
       }
+      if (key === 'a') {
+        event.preventDefault();
+        this.stageManager.addTemporalStage();
+        return;
+      }
+      if (key === 'd') {
+        event.preventDefault();
+        const stages = this.state.get('stages');
+        if (stages && stages.length > 1) {
+          this.stageManager.removeStage(stages[stages.length - 1].id);
+        }
+        return;
+      }
+      if (key === 'i') {
+        event.preventDefault();
+        this.similarity.togglePopover();
+        return;
+      }
     }
 
     // 3. Phím Escape: đóng mọi modal và celebration
@@ -131,24 +149,6 @@ export class KeyboardShortcutsManager {
     if (key === 't') {
       event.preventDefault();
       this.topbar.cycleTaskType();
-      return;
-    }
-    if (key === 'i') {
-      event.preventDefault();
-      this.similarity.togglePopover();
-      return;
-    }
-    if (key === 'a') {
-      event.preventDefault();
-      this.stageManager.addTemporalStage();
-      return;
-    }
-    if (key === 'd') {
-      event.preventDefault();
-      const stages = this.state.get('stages');
-      if (stages.length > 1) {
-        this.stageManager.removeStage(stages[stages.length - 1].id);
-      }
       return;
     }
     if (event.key === '?' || (event.key === '/' && event.shiftKey)) {
