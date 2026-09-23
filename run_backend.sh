@@ -94,4 +94,5 @@ exec -a "$PROC_TITLE" "$PY_BIN" -u -m app.lazy_server \
   --gpu-dtype float16 \
   --model-name "facebook/metaclip-2-worldwide-b16-384" \
   --enable-temporal-search \
+  --temporal-window-ms 45000 \
   --proctitle "$PROC_TITLE"

@@ -55,7 +55,7 @@ class CliParser:
         parser.add_argument("--temporal-local-top-k", type=int, default=200)
         parser.add_argument("--temporal-stage2-keep-k", type=int, default=200)
         parser.add_argument("--temporal-output-top-k", type=int, default=200)
-        parser.add_argument("--temporal-window-ms", type=int, default=300000)
+        parser.add_argument("--temporal-window-ms", type=int, default=45000)
         parser.add_argument("--temporal-session-ttl-seconds", type=int, default=1800)
         parser.add_argument("--temporal-max-sessions", type=int, default=64)
         parser.add_argument("--lazy-load", action="store_true")

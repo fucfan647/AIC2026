@@ -329,7 +329,7 @@ async function performSearch(requestedTemporalStageIndex = null, translatedQuery
     const weightMeta = similarity
       ? `Ảnh tương tự · nguồn ${state.similarityItem.keyframe_id}${state.similarityQuery.trim() ? ` · Ảnh ${100 - state.similarityTextWeight}% / mô tả ${state.similarityTextWeight}%` : ''}`
       : temporal
-      ? `Query ${stageLetter(Math.max(0, Number(payload.stage || 1) - 1))} · cửa sổ ${Number(payload.parameters?.temporal_window_ms || 300000) / 1000} giây · model cố định ${modelLabel}`
+      ? `Query ${stageLetter(Math.max(0, Number(payload.stage || 1) - 1))} · cửa sổ ${Number(payload.parameters?.temporal_window_ms || 45000) / 1000} giây · model cố định ${modelLabel}`
       : multi
       ? `${queries.length} Query${asrOnly ? ' · Chỉ ASR' : ''}`
       : `Hình ảnh ${Math.round(Number(requestBody.metaclip_weight) * 100)}% · Text OCR ${Math.round(Number(requestBody.ocr_weight) * 100)}% · ASR ${Math.round(Number(requestBody.asr_weight || 0) * 100)}%${ocrQuery ? ` · OCR “${ocrQuery}”` : ''}${asrQuery ? ` · ASR “${asrQuery}”` : ''}`;
