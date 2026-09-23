@@ -917,6 +917,7 @@ function renderStages() {
         if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
           event.preventDefault();
           event.stopPropagation();
+          state.queryMode = 'text';
           performSearch(state.searchMode === 'temporal' ? index : null);
         }
       });
@@ -1071,12 +1072,8 @@ function setSimilarityItem(item) {
     showError('Frame nguồn similarity không hợp lệ.');
     return;
   }
-  state.searchMode = 'single';
-  state.stages = state.stages.slice(0, 1);
   state.queryMode = 'similarity';
   state.similarityItem = item;
-  syncSearchModeControls();
-  renderStages();
   const imageUrl = item.thumbnail_url || `/thumbnail/${encodeURIComponent(item.keyframe_id)}`;
   if (els.globalSimilarityDropzone) {
     els.globalSimilarityDropzone.style.padding = '4px';
@@ -1939,8 +1936,7 @@ function openResult(item) {
   let hasPlayed = false;
   state.activeVideoItem = item;
   state.isInitialVideoLoad = true;
-  setVideoFrameTextVisible(false);
-  els.modalTitle.textContent = `Video ${item.video_id} - cảnh ${item.shot_id}`;
+  els.modalTitle.textContent = item.video_id;
   els.videoModal.hidden = false;
   renderActiveQuery();
   els.player.pause();
@@ -1953,6 +1949,7 @@ function openResult(item) {
   renderTrakeTray();
   refreshIcons(els.videoModal);
   updateVideoControls();
+  setVideoFrameTextVisible(true);
   const playVideo = () => {
     state.isInitialVideoLoad = false;
     if (hasPlayed) return;
@@ -2828,7 +2825,6 @@ function renderResults() {
           </button>`}
         <div class="result-overlay-actions">
           <button data-card-action="open" type="button" title="Mở video tại thời điểm này" aria-label="Mở video tại thời điểm này">${openVideoIcon()}</button>
-          <button data-card-action="frames" type="button" title="Xem frame của toàn bộ video" aria-label="Xem frame của toàn bộ video">${framesGalleryIcon()}</button>
           <button data-card-action="select" type="button" title="Thêm frame vào khay chọn" aria-label="Thêm frame vào khay chọn">${addToTrayIcon()}</button>
           ${canSubmit ? `<button class="result-overlay-submit" data-card-action="submit" type="button" title="Submit frame này" aria-label="Submit frame này">${submitIcon()}</button>` : ''}
         </div>
@@ -2853,6 +2849,11 @@ function renderResults() {
       card.classList.add('is-dragging');
     });
     card.addEventListener('dragend', () => card.classList.remove('is-dragging'));
+    card.addEventListener('contextmenu', event => {
+      event.preventDefault();
+      event.stopPropagation();
+      openVideoFrameGallery(item);
+    });
     thumb.addEventListener('click', event => {
       event.stopPropagation();
       const fallbackIndex = state.searchMode === 'multi' ? centerFrameIndex : 0;
@@ -2863,10 +2864,12 @@ function renderResults() {
       event.stopPropagation();
       openResult(item);
     });
-    framesBtn.addEventListener('click', event => {
-      event.stopPropagation();
-      openVideoFrameGallery(item);
-    });
+    if (framesBtn) {
+      framesBtn.addEventListener('click', event => {
+        event.stopPropagation();
+        openVideoFrameGallery(item);
+      });
+    }
     selectBtn.addEventListener('click', event => {
       event.stopPropagation();
       selectResult(item);
@@ -4134,13 +4137,13 @@ async function performSearch(requestedTemporalStageIndex = null, translatedQuery
   const ocrQuery = !temporal && !multi ? ocrQueries[0] : '';
   const asrQuery = !temporal && !multi ? asrQueries[0] : '';
   const asrOnly = !temporal && state.asrOnly && state.backend?.asr_available === true;
-  if (!temporal && !multi) {
-    if (ocrQuery || asrQuery || (query && !state.similarityItem)) state.queryMode = 'text';
-    if (!query && !ocrQuery && !asrQuery && state.similarityItem) state.queryMode = 'similarity';
-  }
-  const similarity = !asrOnly && state.searchMode === 'single'
+  const isSimilarityOpen = Boolean(els.globalSimilarityPopover && !els.globalSimilarityPopover.hidden);
+  const similarity = isSimilarityOpen && !asrOnly
     && Boolean(state.similarityItem)
     && ((!query && !ocrQuery && !asrQuery) || state.queryMode === 'similarity');
+  if (!similarity && !temporal && !multi) {
+    state.queryMode = 'text';
+  }
   const videoFilter = collectVideoFilter();
   const top_k = searchTopK();
   const requestTopK = !temporal && !multi ? top_k * 3 : top_k;
@@ -4539,9 +4542,22 @@ els.taskType.addEventListener('change', renderTaskControls);
 // Global Similarity Dropzone Logic
 els.globalSimilarityBtn.addEventListener('click', () => {
   const isExpanded = els.globalSimilarityBtn.getAttribute('aria-expanded') === 'true';
-  els.globalSimilarityBtn.setAttribute('aria-expanded', !isExpanded);
-  els.globalSimilarityBtn.classList.toggle('is-active', !isExpanded);
-  els.globalSimilarityPopover.hidden = isExpanded;
+  const nextExpanded = !isExpanded;
+  els.globalSimilarityBtn.setAttribute('aria-expanded', String(nextExpanded));
+  els.globalSimilarityBtn.classList.toggle('is-active', nextExpanded);
+  els.globalSimilarityPopover.hidden = !nextExpanded;
+  if (!nextExpanded) {
+    state.similarityItem = null;
+    state.similarityQuery = '';
+    state.queryMode = 'text';
+    if (els.globalSimilarityDropzone) {
+      els.globalSimilarityDropzone.style.padding = '12px';
+      els.globalSimilarityDropzone.innerHTML = `<strong id="globalSimilarityDropzoneText" style="color: var(--text-primary); font-size: 13px;">Thả ảnh vào đây</strong>`;
+    }
+    if (els.globalSimilarityQuery) {
+      els.globalSimilarityQuery.value = '';
+    }
+  }
 });
 
 

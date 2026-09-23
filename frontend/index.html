@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Team Prometheus</title>
-  <link rel="stylesheet" href="./styles.css?v=20260921-trake-user-trays" />
+  <link rel="stylesheet" href="./styles.css?v=20260923-clean-image-modal" />
 </head>
 <body>
   <div id="appShell" class="app-shell">
@@ -178,7 +178,7 @@
     <section class="modal-panel video-panel" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
       <header class="modal-head video-head">
         <strong id="modalTitle">Trình phát video</strong>
-        <button id="closeVideoBtn" class="ghost compact" type="button" title="Đóng video" aria-label="Đóng video">Đóng</button>
+        <button id="closeVideoBtn" class="ghost compact" type="button" title="Đóng video" aria-label="Đóng video" hidden style="display: none !important;">Đóng</button>
       </header>
       <div id="videoActiveQueryContent" class="video-active-query-content" hidden></div>
       <div class="video-main-layout">
@@ -220,11 +220,6 @@
                   <button id="videoSubmitCurrentBtn" class="video-submit-current-btn" type="button" title="Submit frame đang hiển thị lên DRES" aria-label="Submit frame đang hiển thị lên DRES"><i data-lucide="send"></i></button>
                 </div>
                 <div class="video-btn-group">
-                  <button id="videoTextToggleBtn" class="video-context-btn video-text-toggle-btn" type="button" title="Hiện hoặc ẩn ASR tại thời điểm video đang phát" aria-pressed="false"><i data-lucide="mic"></i>ASR</button>
-                  <button id="expandShotContextBtn" class="video-context-btn" type="button" title="Xem toàn bộ 24 shot lân cận" disabled hidden style="display: none !important;"><i data-lucide="gallery-horizontal-end"></i>24 shot</button>
-                  <button id="expandFrameContextBtn" class="video-context-btn" type="button" title="Xem 48 frame lân cận frame đang hiển thị" hidden style="display: none !important;"><i data-lucide="images"></i>48 frame</button>
-                </div>
-                <div class="video-btn-group">
                   <div id="videoSpeedControl" class="video-popover-control">
                     <button id="videoSpeedBtn" class="video-rate-btn is-active" type="button" title="Chọn tốc độ phát" aria-label="Chọn tốc độ phát" aria-expanded="false">x1</button>
                     <div id="videoSpeedMenu" class="video-popover video-speed-menu" role="menu" hidden>
@@ -236,7 +231,12 @@
                       <button class="video-speed-option" type="button" role="menuitemradio" aria-checked="false" data-rate="10"><i data-lucide="check"></i><span>x10</span></button>
                     </div>
                   </div>
-                  <button id="videoFullscreenBtn" class="video-icon-btn" type="button" title="Toàn màn hình" aria-label="Toàn màn hình">⛶</button>
+                </div>
+                <div class="video-btn-group">
+                  <button id="videoTextToggleBtn" class="video-context-btn video-text-toggle-btn" type="button" title="Hiện hoặc ẩn ASR tại thời điểm video đang phát" aria-pressed="true"><i data-lucide="mic"></i>ASR</button>
+                  <button id="expandShotContextBtn" class="video-context-btn" type="button" title="Xem toàn bộ 24 shot lân cận" disabled hidden style="display: none !important;"><i data-lucide="gallery-horizontal-end"></i>24 shot</button>
+                  <button id="expandFrameContextBtn" class="video-context-btn" type="button" title="Xem 48 frame lân cận frame đang hiển thị" hidden style="display: none !important;"><i data-lucide="images"></i>48 frame</button>
+                  <button id="videoFullscreenBtn" class="video-icon-btn" type="button" title="Toàn màn hình" aria-label="Toàn màn hình" hidden style="display: none !important;">⛶</button>
                 </div>
               </div>
             </div>
@@ -292,7 +292,7 @@
         <img id="imagePreview" class="modal-image" alt="" />
       </div>
       <div class="image-details">
-        <div id="imageMeta" class="image-meta"></div>
+        <div id="imageMeta" class="image-meta" hidden style="display: none !important;"></div>
         <div id="imageTextDetails" class="image-text-details"></div>
       </div>
     </section>
@@ -470,6 +470,6 @@
   <audio id="correctSubmissionSound" src="/correct-submission-sound.mp3" preload="auto"></audio>
   <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.18/dist/hls.min.js"></script>
   <script src="https://unpkg.com/lucide@1.27.0/dist/umd/lucide.min.js"></script>
-  <script src="./app.js?v=20260921-trake-user-trays"></script>
+  <script src="./app.js?v=20260923-right-click-gallery"></script>
 </body>
 </html>

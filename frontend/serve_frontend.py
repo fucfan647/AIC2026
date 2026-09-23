@@ -55,7 +55,7 @@ DEFAULT_RECORDS_PATH = _REPO_RECORDS_PATH if _REPO_RECORDS_PATH.is_file() else _
 DEFAULT_DELETED_MANIFEST = FRONTEND_DIR.parent / "frames_deleted/active_deleted_manifest.jsonl"
 DEFAULT_ASR_INDEX = Path(os.environ["ASR_INDEX"]) if os.getenv("ASR_INDEX") else (
     FRONTEND_DIR.parent.parent
-    / "aic2026_resources/aic_resource/10_asr_index/backend/artifacts/asr_index/asr.sqlite"
+    / "/GuestShare_NAS/WorkingSpace/Personal/nghiadq/backend_final/system/backend/artifacts/asr_index/asr.sqlite"
 )
 def resolve_submission_sound_root() -> Path:
     env_path = os.getenv("SUBMISSION_SOUND_ROOT")
