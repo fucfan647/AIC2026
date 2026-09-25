@@ -368,8 +368,8 @@ class TemporalSearchService:
         embedding_model = str(
             request.get("embedding_model", required_model or "metaclip")
         ).strip().lower()
-        if embedding_model not in {"metaclip", "beit3"}:
-            raise TemporalSearchError("embedding_model must be metaclip or beit3")
+        if embedding_model not in {"metaclip", "beit3", "siglip2"}:
+            raise TemporalSearchError("embedding_model must be metaclip, beit3, or siglip2")
         if required_model is not None and embedding_model != required_model:
             raise TemporalSearchError(
                 f"temporal session model is locked to {required_model}; reset and start from Query A to use {embedding_model}",

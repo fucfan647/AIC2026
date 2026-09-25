@@ -46,7 +46,7 @@ class SearchPipelineService:
         asr_weight = params.get("asr_weight", self.runtime.args.asr_weight)
         ocr_query_provided = params.get("ocr_query_provided", False)
         effective_ocr_query = params.get("effective_ocr_query", "")
-        ocr_model = params.get("ocr_model", "monkey")
+        ocr_model = params.get("ocr_model", "union")
         asr_query_provided = params.get("asr_query_provided", False)
         effective_asr_query = params.get("effective_asr_query", "")
         ocr_filter = params.get("ocr_filter", "")
@@ -72,6 +72,11 @@ class SearchPipelineService:
                 raise ServiceUnavailableError(self.runtime.beit3_error or "BEiT-3 search is unavailable")
             search_state = self.runtime.beit3_state
             search_embedder = self.runtime.beit3_embedder
+        elif embedding_model == "siglip2":
+            if self.runtime.siglip2_state is None or self.runtime.siglip2_embedder is None:
+                raise ServiceUnavailableError(self.runtime.siglip2_error or "SigLIP-2 search is unavailable")
+            search_state = self.runtime.siglip2_state
+            search_embedder = self.runtime.siglip2_embedder
         else:
             search_state = self.runtime.state
             search_embedder = self.runtime.embedder
@@ -115,7 +120,7 @@ class SearchPipelineService:
             query_vector = query_vector / norm
 
         candidate_indices = search_state.candidates_for_video(video_id)
-        active_ocr_index = self.runtime.ocr_indexes.get(ocr_model)
+        active_ocr_index = self.runtime.ocr_indexes.get(ocr_model) or getattr(self.runtime, "union_ocr_index", None) or self.runtime.monkey_ocr_index or self.runtime.ocr_index
 
         use_ocr = (
             source_row_id is None

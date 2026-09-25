@@ -13,9 +13,6 @@ cd "$BACKEND_DIR"
 # 1. Select Python Interpreter
 if [ -n "$PYTHON" ]; then
     PY_BIN="$PYTHON"
-elif [ -x "/home/nghiadq/miniconda3/envs/metaclip2/bin/python" ]; then
-    # Local-disk runtime avoids slow and unstable imports from the NAS env.
-    PY_BIN="/home/nghiadq/miniconda3/envs/metaclip2/bin/python"
 elif [ -f "/GuestShare_NAS/WorkingSpace/Personal/nghiadq/miniconda3/envs/sal/bin/python" ]; then
     PY_BIN="/GuestShare_NAS/WorkingSpace/Personal/nghiadq/miniconda3/envs/sal/bin/python"
 elif [ -f "$BACKEND_DIR/.venv/bin/python" ]; then
@@ -36,7 +33,6 @@ PORT="${PORT:-8036}"
 
 # 4. Process Name Mask for nvitop & nvidia-smi
 export PROC_TITLE="${PROC_TITLE:-aic_system}"
-export AIC_KEYFRAMES_ROOT="${AIC_KEYFRAMES_ROOT:-/GuestShare_NAS/WorkingSpace/Personal/nghiadq/synthetic_frames}"
 
 # 5. Model & Index Artifact Paths
 RECORDS_DB="artifacts/current_index/records.sqlite"
@@ -76,28 +72,12 @@ else
     echo "[-] BEiT-3 artifacts not found or incomplete, skipping BEiT-3."
 fi
 
-# Check SigLIP-2 availability
-SIGLIP2_DIR="${SIGLIP2_DIR:-$SCRIPT_DIR/siglip2_embeddings}"
-SIGLIP2_EMBEDDINGS="${SIGLIP2_EMBEDDINGS:-$SIGLIP2_DIR/embeddings.npy}"
-SIGLIP2_MODEL="${SIGLIP2_MODEL:-google/siglip2-base-patch16-224}"
-SIGLIP2_ARGS=()
-if [ -f "$SIGLIP2_EMBEDDINGS" ]; then
-    echo "[+] SigLIP-2 artifacts detected ($SIGLIP2_EMBEDDINGS)."
-    SIGLIP2_ARGS=(
-        --siglip2-embeddings "$SIGLIP2_EMBEDDINGS"
-        --siglip2-model-name "$SIGLIP2_MODEL"
-    )
-else
-    echo "[-] SigLIP-2 embeddings not found at $SIGLIP2_EMBEDDINGS (skip if not used)."
-fi
-
 # Run with exec -a so OS process table and nvitop immediately name it 'aic_system'
 exec -a "$PROC_TITLE" "$PY_BIN" -u -m app.lazy_server \
   --records-db "$RECORDS_DB" \
   --video-ranges "$VIDEO_RANGES" \
   --embeddings "$EMBEDDINGS" \
   "${BEIT3_ARGS[@]}" \
-  "${SIGLIP2_ARGS[@]}" \
   --config "$CONFIG_JSON" \
   --asr-index "$ASR_INDEX" \
   --ocr-index "$PPOCR_INDEX" \
@@ -110,5 +90,4 @@ exec -a "$PROC_TITLE" "$PY_BIN" -u -m app.lazy_server \
   --gpu-dtype float16 \
   --model-name "facebook/metaclip-2-worldwide-b16-384" \
   --enable-temporal-search \
-  --temporal-window-ms 45000 \
   --proctitle "$PROC_TITLE"

@@ -44,8 +44,11 @@ QUERY_ROOT = (
 CSV_SUBMISSION_ROOT = FRONTEND_DIR / "submission"
 USER_PROFILES_PATH = FRONTEND_DIR / "runtime" / "user_profiles.json"
 SUBMISSION_LOG_PATH = FRONTEND_DIR / "runtime" / "submission_log.json"
-SUBMISSION_ACTIVITY_CSV_PATH = FRONTEND_DIR / "runtime" / "submission_activity.csv"
-HLS_ROOT = Path("/mlcv1/Datasets/HCMAI25/streaming/hls")
+HLS_ROOTS = [
+    Path("/mlcv1/Datasets/HCMAI25/streaming/hls"),
+    Path("/GuestShare_NAS/WorkingSpace/Personal/nghiadq/streaming/hls"),
+]
+HLS_ROOT = HLS_ROOTS[0]
 _REPO_RECORDS_PATH = FRONTEND_DIR.parent / "backend/artifacts/current_index/records.sqlite"
 _RESOURCE_RECORDS_PATH = (
     FRONTEND_DIR.parent.parent
@@ -819,20 +822,23 @@ def create_app(
             raise HTTPException(status_code=400, detail="Invalid video id")
         if not asset_path or any(part in asset_path for part in ("..", "\\")):
             raise HTTPException(status_code=400, detail="Invalid HLS path")
-        video_dir = HLS_ROOT / video_id
-        path = video_dir / asset_path
-        try:
-            resolved = path.resolve()
-            resolved.relative_to(video_dir.resolve())
-        except ValueError as exc:
-            raise HTTPException(status_code=404, detail="HLS asset not found") from exc
-        if not resolved.is_file():
-            raise HTTPException(status_code=404, detail=f"HLS asset not found: {video_id}/{asset_path}")
-        return resolved
+        for root in HLS_ROOTS:
+            video_dir = root / video_id
+            path = video_dir / asset_path
+            try:
+                resolved = path.resolve()
+                resolved.relative_to(video_dir.resolve())
+                if resolved.is_file():
+                    return resolved
+            except (ValueError, Exception):
+                continue
+        raise HTTPException(status_code=404, detail=f"HLS asset not found: {video_id}/{asset_path}")
 
     def hls_media_type(path: Path) -> str:
         if path.suffix == ".m3u8":
             return "application/vnd.apple.mpegurl"
+        if path.suffix == ".ts":
+            return "video/mp2t"
         if path.suffix == ".m4s":
             return "video/iso.segment"
         return mimetypes.guess_type(path.name)[0] or "application/octet-stream"

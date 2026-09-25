@@ -43,7 +43,7 @@ class MediaController(BaseController):
         image_file = str(rec.get("image_file") or "")
 
         ocr_info = None
-        active_ocr_index = self.runtime.monkey_ocr_index or self.runtime.ocr_index
+        active_ocr_index = getattr(self.runtime, "union_ocr_index", None) or self.runtime.monkey_ocr_index or self.runtime.ocr_index
         if active_ocr_index is not None:
             ocr_info = active_ocr_index.get_frame_ocr(row_id=row_id, keyframe_id=unquoted_id)
 

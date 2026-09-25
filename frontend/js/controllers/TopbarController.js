@@ -181,7 +181,9 @@ export class TopbarController {
   async toggleEmbeddingModel() {
     if (this.els.embeddingModelToggle?.disabled) return;
     const current = this.state.get('embeddingModel');
-    const next = current === 'metaclip' ? 'beit3' : 'metaclip';
+    const models = ['metaclip', 'beit3', 'siglip2'];
+    const currentIndex = models.indexOf(current);
+    const next = models[(currentIndex + 1) % models.length];
     const previousSessionId = this.state.get('temporalSessionId');
 
     this.state.set('embeddingModel', next);
@@ -208,8 +210,8 @@ export class TopbarController {
       this.els.autoTranslateToggle.classList.toggle('is-active', enabled);
       this.els.autoTranslateToggle.setAttribute('aria-pressed', enabled ? 'true' : 'false');
       this.els.autoTranslateToggle.title = enabled
-        ? 'Auto Dịch tiếng Anh đang BẬT (Phím tắt: Alt+E). Bấm để tắt.'
-        : 'Auto Dịch tiếng Anh đang TẮT (Phím tắt: Alt+E). Bấm để bật tự động dịch câu query tiếng Việt sang tiếng Anh trước khi tìm kiếm.';
+        ? 'Auto Dịch tiếng Anh đang BẬT (Phím tắt: Alt+T). Bấm để tắt.'
+        : 'Auto Dịch tiếng Anh đang TẮT (Phím tắt: Alt+T). Bấm để bật tự động dịch câu query tiếng Việt sang tiếng Anh trước khi tìm kiếm.';
     }
     if (this.els.autoTranslateLabel) {
       this.els.autoTranslateLabel.textContent = enabled ? 'Auto EN: BẬT' : 'Auto EN: Tắt';
@@ -235,8 +237,8 @@ export class TopbarController {
 
   updateConnectionStatus(status, text) {
     if (!this.els.connectionStatus) return;
-    this.els.connectionStatus.className = `status-pill ${status}`;
-    this.els.connectionStatus.textContent = text;
+    this.els.connectionStatus.className = `ghost compact log-btn status-pill ${status}`;
+    this.els.connectionStatus.title = `Trạng thái: ${text} (Bấm để xem log)`;
   }
 
   setQaAnswerText(text) {

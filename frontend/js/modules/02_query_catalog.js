@@ -58,23 +58,27 @@ function renderActiveQuery() {
 }
 
 function renderSubmissionMode() {
-  const isCsv = state.submissionMode === 'csv';
-  els.submissionModeToggle.dataset.mode = state.submissionMode;
-  els.submissionModeToggle.setAttribute('aria-label', `Chế độ nộp bài hiện tại ${isCsv ? 'CSV' : 'DRES'}`);
+  state.submissionMode = 'dres';
+  if (els.submissionModeToggle) {
+    els.submissionModeToggle.dataset.mode = 'dres';
+    els.submissionModeToggle.setAttribute('aria-label', 'Cài đặt DRES');
+    els.submissionModeToggle.title = 'Đăng nhập và chọn evaluation DRES';
+  }
   els.dresOpenBtn.hidden = true;
-  els.queryStrip.hidden = !isCsv;
-  els.taskType.disabled = isCsv && Boolean(activeQuery());
+  els.queryStrip.hidden = true;
+  els.taskType.disabled = false;
   updateMemberNameDisplay();
-  if (els.trakeSubmitBtn) els.trakeSubmitBtn.title = isCsv ? 'Ghi TRAKE vào CSV' : 'Nộp TRAKE lên DRES';
+  if (els.trakeSubmitBtn) els.trakeSubmitBtn.title = 'Nộp TRAKE lên DRES';
   renderQueryStrip();
   renderActiveQuery();
   renderTaskControls();
 }
 
 function toggleSubmissionMode() {
-  state.submissionMode = state.submissionMode === 'dres' ? 'csv' : 'dres';
-  localStorage.setItem(SUBMISSION_MODE_CACHE_KEY, state.submissionMode);
+  state.submissionMode = 'dres';
+  localStorage.setItem(SUBMISSION_MODE_CACHE_KEY, 'dres');
   renderSubmissionMode();
+  openDresModal();
 }
 
 function currentDisplayName() {

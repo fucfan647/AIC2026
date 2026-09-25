@@ -176,6 +176,7 @@ async function openVideoFrameGallery(item) {
           </div>
           <div class="shot-overview-actions">
             <button class="frame-hover-action" type="button" data-frame-action="add" title="Thêm vào khay" aria-label="Thêm frame ${escapeHtml(frame.frame_id ?? frame.keyframe_id)} vào khay">${addToTrayIcon()}</button>
+            <button class="frame-hover-action" type="button" data-frame-action="image-query" title="Thêm vào Image Query (Phím I)" aria-label="Thêm frame ${escapeHtml(frame.frame_id ?? frame.keyframe_id)} vào Image Query">${imageQueryIcon()}</button>
             <button class="frame-hover-action result-overlay-submit" type="button" data-frame-action="submit" title="Submit frame này" aria-label="Submit frame này">${submitIcon()}</button>
           </div>
           ${index === originIndex ? '<span class="current-frame-label origin-frame-label">Frame gốc</span>' : ''}
@@ -185,9 +186,15 @@ async function openVideoFrameGallery(item) {
     els.frameOverviewGrid.querySelectorAll('.video-frame-gallery-card').forEach(card => {
       const frame = state.frameOverviewFrames[Number(card.dataset.frameIndex)];
       card.addEventListener('click', () => openFrameImage(frame));
+      card.addEventListener('mouseenter', () => { state.hoveredCardItem = frame; });
+      card.addEventListener('mouseleave', () => { if (state.hoveredCardItem === frame) state.hoveredCardItem = null; });
       card.querySelector('[data-frame-action="add"]')?.addEventListener('click', async event => {
         event.stopPropagation();
         if (await addKeyframeToTray(frame)) event.currentTarget.classList.add('is-added');
+      });
+      card.querySelector('[data-frame-action="image-query"]')?.addEventListener('click', event => {
+        event.stopPropagation();
+        addFrameToImageQuery(frame);
       });
       card.querySelector('[data-frame-action="submit"]')?.addEventListener('click', async event => {
         event.stopPropagation();

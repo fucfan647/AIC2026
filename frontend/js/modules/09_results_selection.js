@@ -124,6 +124,7 @@ function renderResults() {
         <div class="result-overlay-actions">
           <button data-card-action="open" type="button" title="Mở video tại thời điểm này" aria-label="Mở video tại thời điểm này">${openVideoIcon()}</button>
           <button data-card-action="select" type="button" title="Thêm frame vào khay chọn" aria-label="Thêm frame vào khay chọn">${addToTrayIcon()}</button>
+          <button data-card-action="image-query" type="button" title="Thêm frame vào Image Query (Phím I)" aria-label="Thêm frame vào Image Query">${imageQueryIcon()}</button>
           ${canSubmit ? `<button class="result-overlay-submit" data-card-action="submit" type="button" title="Submit frame này" aria-label="Submit frame này">${submitIcon()}</button>` : ''}
         </div>
       </div>
@@ -140,7 +141,10 @@ function renderResults() {
     const openBtn = card.querySelector('[data-card-action="open"]');
     const framesBtn = card.querySelector('[data-card-action="frames"]');
     const selectBtn = card.querySelector('[data-card-action="select"]');
+    const imageQueryBtn = card.querySelector('[data-card-action="image-query"]');
     const submitBtn = card.querySelector('[data-card-action="submit"]');
+    card.addEventListener('mouseenter', () => { state.hoveredCardItem = item; });
+    card.addEventListener('mouseleave', () => { if (state.hoveredCardItem === item) state.hoveredCardItem = null; });
     card.addEventListener('dragstart', event => {
       event.dataTransfer.effectAllowed = 'copy';
       event.dataTransfer.setData('application/x-aic-keyframe', JSON.stringify(item));
@@ -172,6 +176,12 @@ function renderResults() {
       event.stopPropagation();
       selectResult(item);
     });
+    if (imageQueryBtn) {
+      imageQueryBtn.addEventListener('click', event => {
+        event.stopPropagation();
+        addFrameToImageQuery(item);
+      });
+    }
     if (submitBtn) {
       submitBtn.addEventListener('click', event => {
         event.stopPropagation();

@@ -7,7 +7,33 @@
  */
 
 function openLogModal() {
-  els.logContent.textContent = state.lastLog || 'Chưa có log.';
+  const currentSummary = state.lastStatusSummary || 'Ready';
+  const currentMode = state.lastStatusMode || 'ok';
+  
+  let content = `=== TRẠNG THÁI HIỆN TẠI: ${currentSummary.toUpperCase()} ===\n`;
+  content += `Thời gian: ${new Date().toLocaleString('vi-VN')}\n\n`;
+  
+  if (state.lastLog && state.lastLog !== 'Chưa có log.') {
+    content += `=== CHI TIẾT GẦN NHẤT (LATEST DETAIL / PAYLOAD / RESPONSE) ===\n`;
+    content += `${state.lastLog}\n\n`;
+  }
+  
+  if (state.logs && state.logs.length > 0) {
+    content += `=== LỊCH SỬ SỰ KIỆN GẦN ĐÂY (EVENT TIMELINE) ===\n`;
+    content += state.logs.slice(-40).reverse().join('\n');
+  } else {
+    content += 'Chưa có lịch sử sự kiện nào.';
+  }
+  
+  if (els.logContent) {
+    els.logContent.textContent = content;
+  }
+  
+  const titleEl = document.getElementById('logTitle');
+  if (titleEl) {
+    titleEl.innerHTML = `📋 Chi tiết Log <span class="badge ${currentMode}" style="margin-left: 8px; font-size: 11px; padding: 2px 7px; text-transform: uppercase;">${escapeHtml(currentSummary)}</span>`;
+  }
+  
   els.logModal.hidden = false;
 }
 
@@ -243,13 +269,44 @@ function closeStatsModal() {
 }
 
 function openShortcutsModal() {
-  if (els.shortcutsModal) els.shortcutsModal.hidden = false;
+  if (els.shortcutsModal) {
+    if (typeof syncAutoTranslateControls === 'function') syncAutoTranslateControls();
+    els.shortcutsModal.hidden = false;
+  }
 }
 
 function closeShortcutsModal() {
   if (els.shortcutsModal) els.shortcutsModal.hidden = true;
 }
 
+const NOTE_STORAGE_KEY = 'aic_user_quick_note';
+
+function openQuickNoteModal() {
+  if (!els.quickNoteModal) return;
+  els.quickNoteModal.hidden = false;
+  els.quickNoteBtn?.classList.add('is-active');
+  els.quickNoteBtn?.setAttribute('aria-expanded', 'true');
+  if (els.quickNoteTextarea) {
+    els.quickNoteTextarea.value = localStorage.getItem(NOTE_STORAGE_KEY) || '';
+    setTimeout(() => els.quickNoteTextarea.focus(), 30);
+  }
+}
+
+function closeQuickNoteModal() {
+  if (!els.quickNoteModal) return;
+  els.quickNoteModal.hidden = true;
+  els.quickNoteBtn?.classList.remove('is-active');
+  els.quickNoteBtn?.setAttribute('aria-expanded', 'false');
+}
+
+function toggleQuickNoteModal() {
+  if (!els.quickNoteModal) return;
+  if (els.quickNoteModal.hidden) {
+    openQuickNoteModal();
+  } else {
+    closeQuickNoteModal();
+  }
+}
 
 // Gắn các hàm và biến lên window để các module khác truy cập thông suốt
 if (typeof window !== "undefined") {
@@ -266,5 +323,8 @@ if (typeof window !== "undefined") {
   try { window.closeStatsModal = closeStatsModal; } catch (_) {}
   try { window.openShortcutsModal = openShortcutsModal; } catch (_) {}
   try { window.closeShortcutsModal = closeShortcutsModal; } catch (_) {}
+  try { window.openQuickNoteModal = openQuickNoteModal; } catch (_) {}
+  try { window.closeQuickNoteModal = closeQuickNoteModal; } catch (_) {}
+  try { window.toggleQuickNoteModal = toggleQuickNoteModal; } catch (_) {}
   try { window.TIMING_ROWS = TIMING_ROWS; } catch (_) {}
 }

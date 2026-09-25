@@ -212,10 +212,6 @@ async function clearMyTrakeFrames() {
 }
 
 async function removeTrakeUser(clientId, name, frameCount) {
-  const description = frameCount > 0
-    ? `Xóa user ${name} cùng ${frameCount} frame khỏi cả hai khay?`
-    : `Xóa user ${name} khỏi Team Hub?`;
-  if (!window.confirm(description)) return;
   try {
     const resp = await fetch('/team/trake/user/remove', {
       method: 'POST',

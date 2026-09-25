@@ -36,8 +36,12 @@ class AppRuntime:
         self.beit3_state = None
         self.beit3_embedder = None
         self.beit3_error = None
+        self.siglip2_state = None
+        self.siglip2_embedder = None
+        self.siglip2_error = None
         self.ocr_index = None
         self.monkey_ocr_index = None
+        self.union_ocr_index = None
         self.ocr_indexes: Dict[str, Any] = {}
         self.asr_index = None
         self.fuse_ranked_results = None
@@ -52,10 +56,17 @@ class AppRuntime:
         """Thực hiện tuần tự việc tải và khởi tạo các tài nguyên AI."""
         try:
             self.stage = "importing"
-            from ..embedder import Beit3Config, Beit3Embedder, MetaClip2Config, MetaClip2Embedder
+            from ..embedder import (
+                Beit3Config,
+                Beit3Embedder,
+                MetaClip2Config,
+                MetaClip2Embedder,
+                Siglip2Config,
+                Siglip2Embedder,
+            )
             from ..asr import AsrTextIndex, fuse_with_asr
             from ..index import RetrievalState
-            from ..ocr import OcrTextIndex, fuse_ranked_results
+            from ..ocr import OcrTextIndex, UnionOcrIndex, fuse_ranked_results
             from ..temporal_search import TemporalSearchService
 
             self.stage = "loading_model"
@@ -121,6 +132,13 @@ class AppRuntime:
                     )
                 self.ocr_indexes["monkey"] = self.monkey_ocr_index
                 uvicorn_log("INFO", f"Caching MonkeyOCRv2 index ({self.monkey_ocr_index.num_records:,} frame)... OK")
+            ocr_sub_indexes = [idx for idx in [self.monkey_ocr_index, self.ocr_index] if idx is not None]
+            if ocr_sub_indexes:
+                self.union_ocr_index = UnionOcrIndex(ocr_sub_indexes)
+                self.ocr_indexes["union"] = self.union_ocr_index
+                uvicorn_log("INFO", f"Caching Union OCR Index ({self.union_ocr_index.num_records:,} frame, {len(ocr_sub_indexes)} engines)... OK")
+            else:
+                self.union_ocr_index = None
             if self.args.asr_index.is_file():
                 self.stage = "loading_asr_cache"
                 self.asr_index = AsrTextIndex(
@@ -186,6 +204,59 @@ class AppRuntime:
                     self.beit3_embedder = None
                     self.beit3_error = str(exc)
                     print(f"[lazy] BEiT-3 unavailable: {exc}", flush=True)
+
+            siglip2_path = getattr(self.args, "siglip2_embeddings", None)
+            if siglip2_path and siglip2_path.exists():
+                try:
+                    siglip2_model_name = getattr(self.args, "siglip2_model_name", "google/siglip2-base-patch16-224")
+                    print(f"[lazy] loading SigLIP-2 text model: {siglip2_model_name}", flush=True)
+                    self.stage = "loading_siglip2_model"
+                    self.siglip2_embedder = Siglip2Embedder(
+                        Siglip2Config(
+                            model_name=siglip2_model_name,
+                            device=self.args.device,
+                            dtype="float16" if str(self.args.device).startswith("cuda") else "float32",
+                            local_files_only=getattr(self.args, "local_files_only", False),
+                        )
+                    )
+                    print(f"[lazy] loading SigLIP-2 index: {siglip2_path}", flush=True)
+                    self.stage = "loading_siglip2_index"
+                    self.siglip2_state = RetrievalState(
+                        records_db=self.args.records_db,
+                        video_ranges_path=self.args.video_ranges,
+                        embeddings_path=siglip2_path,
+                        config_path=self.args.config,
+                        backend=self.args.backend,
+                        device=self.args.device,
+                        gpu_dtype=self.args.gpu_dtype,
+                        embedding_dim=getattr(self.siglip2_embedder, "embedding_dim", None),
+                        excluded_indices=self.excluded_indices,
+                        milvus_host=(
+                            self.args.milvus_host
+                            if self.args.storage_backend == "milvus"
+                            else None
+                        ),
+                        milvus_port=self.args.milvus_port,
+                        milvus_collection=(
+                            getattr(self.args, "siglip2_milvus_collection", None)
+                            if self.args.storage_backend == "milvus"
+                            else None
+                        ),
+                    )
+                    if self.siglip2_state.index.num_vectors != self.state.index.num_vectors:
+                        raise ValueError(
+                            "SigLIP-2/MetaCLIP vector count mismatch: "
+                            f"{self.siglip2_state.index.num_vectors} != {self.state.index.num_vectors}"
+                        )
+                    if self.siglip2_embedder.embedding_dim is None:
+                        self.siglip2_embedder.embedding_dim = self.siglip2_state.embeddings.shape[1]
+                    uvicorn_log("INFO", f"Loaded SigLIP-2 embeddings shape: {list(self.siglip2_state.embeddings.shape)}")
+                except Exception as exc:
+                    self.siglip2_state = None
+                    self.siglip2_embedder = None
+                    self.siglip2_error = str(exc)
+                    print(f"[lazy] SigLIP-2 unavailable: {exc}", flush=True)
+
             if self.args.enable_temporal_search:
                 print("[lazy] preparing temporal search", flush=True)
                 self.stage = "loading_temporal_search"
@@ -195,11 +266,14 @@ class AppRuntime:
                     if self.beit3_state is not None and self.beit3_embedder is not None:
                         temporal_states["beit3"] = self.beit3_state
                         temporal_embedders["beit3"] = self.beit3_embedder
+                    if self.siglip2_state is not None and self.siglip2_embedder is not None:
+                        temporal_states["siglip2"] = self.siglip2_state
+                        temporal_embedders["siglip2"] = self.siglip2_embedder
                     self.temporal_service = TemporalSearchService(
                         temporal_states,
                         temporal_embedders,
                         self.excluded_indices,
-                        ocr_index=self.monkey_ocr_index or self.ocr_index,
+                        ocr_index=self.union_ocr_index or self.monkey_ocr_index or self.ocr_index,
                         asr_index=self.asr_index,
                         fuse_ranked_results=self.fuse_ranked_results,
                         fuse_with_asr=self.fuse_with_asr,
@@ -275,13 +349,21 @@ class AppRuntime:
                         if self.temporal_service is None
                         else self.temporal_service.parameters
                     ),
-                    "ocr_available": self.ocr_index is not None,
-                    "ocr_filter_available": self.ocr_index is not None,
+                    "ocr_available": (self.union_ocr_index is not None) or (self.ocr_index is not None) or (self.monkey_ocr_index is not None),
+                    "ocr_filter_available": (self.union_ocr_index is not None) or (self.ocr_index is not None) or (self.monkey_ocr_index is not None),
                     "ocr_index_path": str(self.args.ocr_index),
-                    "ocr_cache_mode": self.ocr_index.cache_mode if self.ocr_index is not None else None,
-                    "ocr_records": self.ocr_index.num_records if self.ocr_index is not None else 0,
-                    "ocr_text_records": self.ocr_index.num_text_records if self.ocr_index is not None else 0,
+                    "ocr_cache_mode": "memory" if self.union_ocr_index is not None else (self.ocr_index.cache_mode if self.ocr_index is not None else None),
+                    "ocr_records": self.union_ocr_index.num_records if self.union_ocr_index is not None else (self.ocr_index.num_records if self.ocr_index is not None else 0),
+                    "ocr_text_records": self.union_ocr_index.num_text_records if self.union_ocr_index is not None else (self.ocr_index.num_text_records if self.ocr_index is not None else 0),
                     "ocr_models": {
+                        "union": {
+                            "available": self.union_ocr_index is not None,
+                            "records": self.union_ocr_index.num_records if self.union_ocr_index is not None else 0,
+                            "source_records": self.union_ocr_index.source_num_records if self.union_ocr_index is not None else 0,
+                            "coverage_ratio": self.union_ocr_index.coverage_ratio if self.union_ocr_index is not None else 0.0,
+                            "partial": self.union_ocr_index.is_partial if self.union_ocr_index is not None else False,
+                            "model_name": self.union_ocr_index.ocr_model if self.union_ocr_index is not None else None,
+                        },
                         "ppocr": {
                             "available": self.ocr_index is not None,
                             "path": str(self.args.ocr_index),
@@ -340,6 +422,29 @@ class AppRuntime:
                             ),
                             "error": self.beit3_error,
                         },
+                        "siglip2": {
+                            "available": (
+                                self.siglip2_state is not None
+                                and self.siglip2_embedder is not None
+                            ),
+                            "embedding_shape": (
+                                None
+                                if self.siglip2_state is None
+                                else list(self.siglip2_state.embeddings.shape)
+                            ),
+                            "model_name": getattr(self.args, "siglip2_model_name", "google/siglip2-base-patch16-224"),
+                            "storage_backend": (
+                                None
+                                if self.siglip2_state is None
+                                else self.siglip2_state.storage_backend
+                            ),
+                            "milvus_collection": (
+                                None
+                                if self.siglip2_state is None
+                                else self.siglip2_state.milvus_collection
+                            ),
+                            "error": self.siglip2_error,
+                        },
                     },
                 }
             )
@@ -359,8 +464,12 @@ class LazyRuntime(AppRuntime):
         self.beit3_state = None
         self.beit3_embedder = None
         self.beit3_error = None
+        self.siglip2_state = None
+        self.siglip2_embedder = None
+        self.siglip2_error = None
         self.ocr_index = None
         self.monkey_ocr_index = None
+        self.union_ocr_index = None
         self.ocr_indexes: Dict[str, Any] = {}
         self.asr_index = None
         self.fuse_ranked_results = None

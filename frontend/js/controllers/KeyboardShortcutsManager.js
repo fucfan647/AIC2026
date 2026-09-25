@@ -64,7 +64,7 @@ export class KeyboardShortcutsManager {
         this.topbar.setTaskType(TASK_TYPES.KIS);
         return;
       }
-      if (key === '2' || key === 't') {
+      if (key === '2') {
         event.preventDefault();
         this.topbar.setTaskType(TASK_TYPES.TRAKE);
         return;
@@ -74,7 +74,12 @@ export class KeyboardShortcutsManager {
         this.topbar.setTaskType(TASK_TYPES.QA);
         return;
       }
-      if (key === 'e') {
+      if (key === 'm') {
+        event.preventDefault();
+        this.topbar.toggleEmbeddingModel();
+        return;
+      }
+      if (key === 't' || key === 'e') {
         event.preventDefault();
         this.topbar.toggleAutoTranslate();
         return;

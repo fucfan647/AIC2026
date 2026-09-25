@@ -30,7 +30,7 @@ class MetaClip2Config:
 class MetaClip2Embedder:
     def __init__(self, config: MetaClip2Config):
         try:
-            from transformers import AutoModel, AutoTokenizer
+            from transformers import AutoModel, AutoProcessor
             import torch
         except Exception as exc:
             raise RuntimeError("torch and transformers are required for MetaCLIP-2 search") from exc
@@ -40,10 +40,7 @@ class MetaClip2Embedder:
         torch_dtype = torch.float16 if config.dtype == "float16" and config.device.startswith("cuda") else torch.float32
         print(f"[embedder] loading processor: {config.model_name}", flush=True)
         started = time.time()
-        # Retrieval only encodes text. Loading AutoProcessor on MetaCLIP-2
-        # misclassifies its XLM-R tokenizer as CLIPTokenizer in some
-        # transformers releases; AutoTokenizer selects XLMRoberta correctly.
-        self.processor = AutoTokenizer.from_pretrained(
+        self.processor = AutoProcessor.from_pretrained(
             config.model_name,
             local_files_only=config.local_files_only,
             trust_remote_code=True,
@@ -295,104 +292,3 @@ class Beit3Embedder:
             "model_forward_ms": round(model_forward_ms, 3),
             "embedding_postprocess_ms": round(embedding_postprocess_ms, 3),
         }
-
-
-@dataclass(frozen=True)
-class Siglip2Config:
-    model_name: str = "google/siglip2-base-patch16-224"
-    device: str = "cuda"
-    dtype: str = "float16"
-    local_files_only: bool = False
-    embedding_dim: int | None = None
-
-
-class Siglip2Embedder:
-    def __init__(self, config: Siglip2Config):
-        try:
-            from transformers import AutoModel, AutoTokenizer, AutoProcessor
-            import torch
-        except Exception as exc:
-            raise RuntimeError("torch and transformers are required for SigLIP-2 search") from exc
-
-        self.torch = torch
-        self.device = config.device
-        self.embedding_dim = config.embedding_dim
-        torch_dtype = torch.float16 if config.dtype == "float16" and config.device.startswith("cuda") else torch.float32
-
-        print(f"[embedder] loading SigLIP-2 processor/tokenizer: {config.model_name}", flush=True)
-        started = time.time()
-        try:
-            self.processor = AutoTokenizer.from_pretrained(
-                config.model_name,
-                local_files_only=config.local_files_only,
-                trust_remote_code=True,
-            )
-        except Exception:
-            self.processor = AutoProcessor.from_pretrained(
-                config.model_name,
-                local_files_only=config.local_files_only,
-                trust_remote_code=True,
-            )
-        print(f"[embedder] SigLIP-2 processor loaded in {time.time() - started:.2f}s", flush=True)
-
-        print(f"[embedder] loading SigLIP-2 model: {config.model_name}", flush=True)
-        started = time.time()
-        self.model = AutoModel.from_pretrained(
-            config.model_name,
-            torch_dtype=torch_dtype,
-            local_files_only=config.local_files_only,
-            trust_remote_code=True,
-        ).to(config.device)
-        self.model.eval()
-        print(f"[embedder] SigLIP-2 model loaded in {time.time() - started:.2f}s", flush=True)
-
-    def _to_device(self, inputs: dict[str, Any]) -> dict[str, Any]:
-        return {key: value.to(self.device) if hasattr(value, "to") else value for key, value in inputs.items()}
-
-    def _sync(self) -> None:
-        if self.device.startswith("cuda") and self.torch.cuda.is_available():
-            self.torch.cuda.synchronize()
-
-    def encode_text_profiled(self, text: str):
-        tokenize_started = time.perf_counter()
-        inputs = self.processor(text=[text], padding=True, truncation=True, return_tensors="pt")
-        tokenize_ms = (time.perf_counter() - tokenize_started) * 1000.0
-
-        transfer_started = time.perf_counter()
-        inputs = self._to_device(inputs)
-        self._sync()
-        input_to_gpu_ms = (time.perf_counter() - transfer_started) * 1000.0
-
-        forward_started = time.perf_counter()
-        with self.torch.no_grad():
-            if hasattr(self.model, "get_text_features"):
-                emb = self.model.get_text_features(**inputs)
-            else:
-                emb = self.model(**inputs)
-            if not isinstance(emb, self.torch.Tensor):
-                if hasattr(emb, "pooler_output") and emb.pooler_output is not None:
-                    emb = emb.pooler_output
-                elif hasattr(emb, "text_embeds") and emb.text_embeds is not None:
-                    emb = emb.text_embeds
-                elif hasattr(emb, "last_hidden_state") and emb.last_hidden_state is not None:
-                    emb = emb.last_hidden_state[:, 0, :]
-                else:
-                    raise RuntimeError("SigLIP-2 model output does not expose text embeddings")
-        self._sync()
-        model_forward_ms = (time.perf_counter() - forward_started) * 1000.0
-
-        post_started = time.perf_counter()
-        emb = emb / emb.norm(dim=-1, keepdim=True).clamp_min(1e-12)
-        arr = emb.detach().float().cpu().numpy().astype(np.float32)
-        arr = l2_normalize(arr)
-        if self.embedding_dim is not None and arr.shape != (1, self.embedding_dim):
-            raise ValueError(f"SigLIP-2 text embedding shape must be (1, {self.embedding_dim}), got {arr.shape}")
-        embedding_postprocess_ms = (time.perf_counter() - post_started) * 1000.0
-
-        return arr[0], {
-            "tokenize_ms": round(tokenize_ms, 3),
-            "input_to_gpu_ms": round(input_to_gpu_ms, 3),
-            "model_forward_ms": round(model_forward_ms, 3),
-            "embedding_postprocess_ms": round(embedding_postprocess_ms, 3),
-        }
-

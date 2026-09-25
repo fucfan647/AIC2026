@@ -74,16 +74,16 @@ class SearchController(BaseController):
         ocr_query_provided = "ocr_query" in request
         ocr_query = str(request.get("ocr_query", "")).strip()
         effective_ocr_query = ocr_query if ocr_query_provided else query
-        ocr_model = str(request.get("ocr_model", "monkey")).strip().lower()
+        ocr_model = str(request.get("ocr_model", "union")).strip().lower()
         asr_query_provided = "asr_query" in request
         asr_query = str(request.get("asr_query", "")).strip()
         effective_asr_query = asr_query if asr_query_provided else query
         ocr_filter = str(request.get("ocr_filter", "")).strip()
 
-        if embedding_model not in {"metaclip", "beit3"}:
-            raise ValueError("embedding_model must be metaclip or beit3")
-        if ocr_model not in {"ppocr", "monkey"}:
-            raise ValueError("ocr_model must be ppocr or monkey")
+        if embedding_model not in {"metaclip", "beit3", "siglip2"}:
+            raise ValueError("embedding_model must be metaclip, beit3, or siglip2")
+        if ocr_model not in {"union", "ppocr", "monkey"}:
+            raise ValueError("ocr_model must be union, ppocr, or monkey")
         if search_mode not in {"visual", "hybrid", "similarity"}:
             raise ValueError("search_mode must be visual, hybrid, or similarity")
         if (

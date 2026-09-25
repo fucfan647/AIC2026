@@ -79,9 +79,9 @@ async function performSearch(requestedTemporalStageIndex = null, translatedQuery
       setStatus('Không dịch được query, đang tiếp tục tìm kiếm…', 'searching');
     }
   }
-  const queries = originalQueries.map((query, index) => state.stages[index]?.translatedQuery || query);
+  const queries = originalQueries.map((query, index) => (state.autoTranslate ? (state.stages[index]?.translatedQuery || query) : query));
   const temporalOriginalQuery = temporal ? (originalQueries[temporalStageIndex] || '') : '';
-  const temporalQuery = temporal ? (translatedQueryOverride || state.stages[temporalStageIndex]?.translatedQuery || temporalOriginalQuery) : '';
+  const temporalQuery = temporal ? (translatedQueryOverride || (state.autoTranslate ? state.stages[temporalStageIndex]?.translatedQuery : '') || temporalOriginalQuery) : '';
   const temporalOcrQuery = temporal ? (ocrQueries[temporalStageIndex] || '') : '';
   const temporalAsrQuery = temporal ? (asrQueries[temporalStageIndex] || '') : '';
   const enteredQuery = translatedQueryOverride || queries[0] || '';
@@ -238,7 +238,7 @@ async function performSearch(requestedTemporalStageIndex = null, translatedQuery
       state.temporalSessionId = payload.session_id;
       state.temporalStage = Number(payload.stage || 0);
       if (state.stages[temporalStageIndex]) {
-        state.stages[temporalStageIndex].temporalExpanded = false;
+        state.stages[temporalStageIndex].temporalExpanded = true;
       }
       if (state.temporalStage < 3 && state.stages.length === state.temporalStage) {
         const nextIndex = state.temporalStage;
@@ -250,7 +250,8 @@ async function performSearch(requestedTemporalStageIndex = null, translatedQuery
           ocrQuery: '',
           asrQuery: '',
           ocrWeight: 0,
-          asrWeight: 0
+          asrWeight: 0,
+          temporalExpanded: true
         });
       }
     }
@@ -335,7 +336,7 @@ async function performSearch(requestedTemporalStageIndex = null, translatedQuery
       : `Hình ảnh ${Math.round(Number(requestBody.metaclip_weight) * 100)}% · Text OCR ${Math.round(Number(requestBody.ocr_weight) * 100)}% · ASR ${Math.round(Number(requestBody.asr_weight || 0) * 100)}%${ocrQuery ? ` · OCR “${ocrQuery}”` : ''}${asrQuery ? ` · ASR “${asrQuery}”` : ''}`;
     const temporalMeta = temporal ? `Temporal ${payload.stage_count || queries.length} hành động · ` : '';
     const anchorMeta = temporal && payload.anchor_stage ? `anchor H${payload.anchor_stage} · ` : '';
-    const ocrModelLabel = state.ocrModel === 'monkey' ? 'MonkeyOCRv2' : 'PP-OCRv6';
+    const ocrModelLabel = state.ocrModel === 'union' ? 'Union OCR' : (state.ocrModel === 'monkey' ? 'MonkeyOCRv2' : 'PP-OCRv6');
     els.searchMeta.textContent = `${modelLabel} · ${ocrModelLabel} · ${temporalMeta}${anchorMeta}${backendMethodLabel(payload.search_backend)} · ${weightMeta}${filterMeta}`;
     els.results.scrollTo({top: 0, left: 0, behavior: 'smooth'});
     setStatus('Đã kết nối', 'ok');
@@ -401,7 +402,7 @@ async function resetTemporalSearch() {
     state.temporalSessionId = null;
     state.temporalStage = 0;
     state.stages = state.stages.slice(0, 1);
-    state.stages[0].temporalExpanded = false;
+    state.stages[0].temporalExpanded = true;
     invalidateTemporalResults();
     renderStages();
     syncSearchModeControls();

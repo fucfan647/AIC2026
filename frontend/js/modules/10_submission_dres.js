@@ -186,15 +186,11 @@ function renderTaskControls() {
 
 function renderDresSession() {
   const loggedIn = Boolean(state.dresSessionId);
-  const needsName = loggedIn && state.dresSelectedEvaluationId && !state.memberName;
+  const needsName = loggedIn && Boolean(state.dresSelectedEvaluationId) && !state.dresNameConfirmed;
   els.dresLoginView.hidden = loggedIn;
   els.dresSessionView.hidden = !loggedIn || needsName;
   els.memberNameView.hidden = !needsName;
   els.dresTitle.textContent = !loggedIn ? 'DRES Login' : needsName ? 'Tên gọi của bạn' : 'DRES Active Session';
-  const sessionNameEl = document.getElementById('sessionMemberNameDisplay');
-  if (sessionNameEl) {
-    sessionNameEl.textContent = state.memberName || state.dresUsername || 'Chưa đặt';
-  }
   els.dresOpenBtn.hidden = true; // Xóa nút đỏ duplicate; danh tính user đã nằm ở memberNameBtn
   renderResults();
 }
@@ -202,8 +198,12 @@ function renderDresSession() {
 function openDresModal() {
   els.dresModal.hidden = false;
   renderDresSession();
-  const focusTarget = !state.dresSessionId ? els.dresUsername : state.dresSelectedEvaluationId && !state.memberName ? els.memberName : els.evaluationSelect;
-  window.setTimeout(() => focusTarget.focus(), 0);
+  const focusTarget = !state.dresSessionId
+    ? els.dresUsername
+    : (state.dresSelectedEvaluationId && !state.dresNameConfirmed)
+      ? els.memberName
+      : els.evaluationSelect;
+  window.setTimeout(() => focusTarget?.focus(), 0);
 }
 
 function closeDresModal() {
@@ -253,10 +253,14 @@ function chooseEvaluation() {
     return;
   }
   state.dresSelectedEvaluationId = evaluationId;
+  state.dresNameConfirmed = false;
   saveDresCache();
   renderDresSession();
-  setDresStatus(`Đã chọn evaluation: ${els.evaluationSelect.options[els.evaluationSelect.selectedIndex].textContent}`);
-  if (state.memberName) closeDresModal();
+  setDresStatus('');
+  if (els.memberName) {
+    els.memberName.value = state.memberName || '';
+    window.setTimeout(() => els.memberName.focus(), 0);
+  }
 }
 
 async function saveMemberName() {
@@ -266,6 +270,7 @@ async function saveMemberName() {
     return;
   }
   state.memberName = name;
+  state.dresNameConfirmed = true;
   saveMemberCache();
   try {
     const resp = await fetch('/team/member', {
@@ -277,7 +282,7 @@ async function saveMemberName() {
     if (!resp.ok) throw new Error(teamState.detail || 'Lưu tên gọi thất bại.');
     applyTeamState(teamState);
     renderDresSession();
-    setDresStatus(`Đã lưu tên gọi: ${name}`);
+    setDresStatus('');
     closeDresModal();
   } catch (error) {
     showError(error.message || String(error));
@@ -286,9 +291,11 @@ async function saveMemberName() {
 
 function backToEvaluation() {
   state.dresSelectedEvaluationId = '';
+  state.dresNameConfirmed = false;
   saveMemberCache();
   saveDresCache();
   renderDresSession();
+  setDresStatus('');
 }
 
 async function loginDres() {
@@ -325,8 +332,9 @@ async function loginDres() {
     state.dresUsername = loginPayload.username || username;
     state.dresServerUrl = serverUrl;
     state.dresSelectedEvaluationId = '';
+    state.dresNameConfirmed = false;
     els.dresPassword.value = '';
-    setDresStatus(`Đã đăng nhập: ${loginPayload.username || username}`);
+    setDresStatus('');
 
     const evalResp = await fetch('/dres/evaluations', {
       method: 'POST',
@@ -339,12 +347,12 @@ async function loginDres() {
     renderEvaluations();
     renderDresSession();
     saveDresCache();
-    const activeCount = state.dresEvaluations.filter(item => item.status === 'ACTIVE').length;
-    setDresStatus(`Đã tải ${state.dresEvaluations.length} evaluation, ${activeCount} đang ACTIVE. Chọn evaluation để tiếp tục.`);
+    setDresStatus('');
   } catch (error) {
     state.dresSessionId = null;
     state.dresEvaluations = [];
     state.dresSelectedEvaluationId = '';
+    state.dresNameConfirmed = false;
     saveDresCache();
     renderEvaluations();
     renderDresSession();
@@ -373,6 +381,7 @@ async function logoutDres() {
   state.dresSessionId = null;
   state.dresEvaluations = [];
   state.dresSelectedEvaluationId = '';
+  state.dresNameConfirmed = false;
   state.dresUsername = '';
   state.memberName = '';
   els.dresUsername.value = '';

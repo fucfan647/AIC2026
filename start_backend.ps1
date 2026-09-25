@@ -24,6 +24,8 @@ $beit3RuntimePython = if (Test-AicFeatureEnabled -Config $config -Name "beit3") 
 $ppocrIndex = if (Test-AicFeatureEnabled -Config $config -Name "ppocr") { Resolve-AicSystemPath -Value ([string]$config.paths.ppocr_index) } else { Join-Path $disabledRoot "ppocr.sqlite" }
 $monkeyOcrIndex = if (Test-AicFeatureEnabled -Config $config -Name "monkey_ocr") { Resolve-AicSystemPath -Value ([string]$config.paths.monkey_ocr_index) } else { Join-Path $disabledRoot "monkey_ocr.sqlite" }
 $asrIndex = if (Test-AicFeatureEnabled -Config $config -Name "asr") { Resolve-AicSystemPath -Value ([string]$config.paths.asr_index) } else { Join-Path $disabledRoot "asr.sqlite" }
+$siglip2Embeddings = if (Test-AicFeatureEnabled -Config $config -Name "siglip2") { Resolve-AicSystemPath -Value ([string]$config.paths.siglip2_embeddings) } else { Join-Path $disabledRoot "siglip2_embeddings.npy" }
+$siglip2Model = if ([string]::IsNullOrWhiteSpace([string]$config.paths.siglip2_model_dir)) { [string]$config.backend.siglip2_model_name } else { Resolve-AicSystemPath -Value ([string]$config.paths.siglip2_model_dir) }
 $modelName = if ([string]::IsNullOrWhiteSpace([string]$config.paths.metaclip_model_dir)) { [string]$config.backend.model_name } else { Resolve-AicSystemPath -Value ([string]$config.paths.metaclip_model_dir) }
 
 $arguments = @(
@@ -36,6 +38,8 @@ $arguments = @(
     "--beit3-sentencepiece", $beit3Sentencepiece,
     "--beit3-runtime-python", $beit3RuntimePython,
     "--beit3-max-text-length", [string]$config.backend.beit3_max_text_length,
+    "--siglip2-embeddings", $siglip2Embeddings,
+    "--siglip2-model-name", $siglip2Model,
     "--config", (Resolve-AicSystemPath -Value ([string]$config.paths.index_config)),
     "--ocr-index", $ppocrIndex,
     "--monkey-ocr-index", $monkeyOcrIndex,
@@ -46,6 +50,7 @@ $arguments = @(
     "--milvus-port", [string]$config.backend.milvus_port,
     "--milvus-collection", [string]$config.backend.milvus_collection,
     "--beit3-milvus-collection", [string]$config.backend.beit3_milvus_collection,
+    "--siglip2-milvus-collection", [string]$config.backend.siglip2_milvus_collection,
     "--host", [string]$config.backend.host,
     "--port", [string]$config.backend.port,
     "--backend", [string]$config.backend.search_backend,

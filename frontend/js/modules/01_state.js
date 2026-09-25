@@ -9,7 +9,7 @@
 const state = {
   searchMode: 'temporal',
   embeddingModel: 'metaclip',
-  ocrModel: 'monkey',
+  ocrModel: 'union',
   queryMode: 'text',
   similarityItem: null,
   similarityQuery: '',
@@ -26,6 +26,7 @@ const state = {
   dresSessionId: null,
   dresEvaluations: [],
   dresSelectedEvaluationId: '',
+  dresNameConfirmed: false,
   dresUsername: '',
   dresServerUrl: 'http://192.168.28.151:5000',
   submissionMode: 'dres',
@@ -53,6 +54,7 @@ const state = {
   activeFrameContextFrames: [],
   frameOverviewFrames: [],
   imageItem: null,
+  hoveredCardItem: null,
   shotContextCache: new Map(),
   submissionFeedback: new Map(),
   handledSubmissionEvents: new Set(),
@@ -106,6 +108,11 @@ const els = {
   activeQueryContent: document.getElementById('activeQueryContent'),
   videoActiveQueryContent: document.getElementById('videoActiveQueryContent'),
   globalSimilarityBtn: document.getElementById('globalSimilarityBtn'),
+  quickNoteBtn: document.getElementById('quickNoteBtn'),
+  quickNoteModal: document.getElementById('quickNoteModal'),
+  quickNoteTextarea: document.getElementById('quickNoteTextarea'),
+  closeQuickNoteBtn: document.getElementById('closeQuickNoteBtn'),
+  clearQuickNoteBtn: document.getElementById('clearQuickNoteBtn'),
   globalSimilarityPopover: document.getElementById('globalSimilarityPopover'),
   globalSimilarityDropzone: document.getElementById('globalSimilarityDropzone'),
   globalSimilarityQuery: document.getElementById('globalSimilarityQuery'),
@@ -238,10 +245,44 @@ function stageLetter(index) {
   return String.fromCharCode(65 + index);
 }
 
-function setStatus(text, mode = 'neutral') {
+function formatLogSummary(text, mode) {
+  const t = String(text || '').toLowerCase().trim();
+  if (t === 'correct' || t.includes('correct')) return 'Correct';
+  if (t === 'wrong' || t.includes('wrong')) return 'Wrong';
+  if (t.includes('đang submit') || t.includes('request') || t.includes('nộp')) return 'Request';
+  if (t.includes('đang tìm') || t.includes('searching') || t.includes('đang dịch')) return 'Searching';
+  if (t.includes('loading') || t.includes('đang tải') || t.includes('đang kết nối')) return 'Loading';
+  if (t.includes('response') || t.includes('đã submit') || t.includes('đã ghi csv')) return 'Response';
+  if (t.includes('lỗi') || t.includes('error') || mode === 'error') return 'Error';
+  if (t.includes('done') || t.includes('hoàn tất')) return 'Done';
+  if (t.includes('đã kết nối') || t.includes('sẵn sàng') || t.includes('ready')) return 'Ready';
+  if (mode === 'ok') return 'Done';
+  if (mode === 'searching') return 'Searching';
+  return text.length <= 10 ? text : 'Ready';
+}
+
+function setStatus(text, mode = 'neutral', explicitSummary = null) {
   els.status.textContent = text;
-  els.connectionStatus.textContent = mode === 'searching' ? 'Đang tìm' : text;
-  els.connectionStatus.className = `status-pill ${mode === 'ok' ? 'ok' : mode === 'error' ? 'error' : 'warning'}`;
+  const statusMode = mode === 'searching' ? 'searching' : (mode === 'ok' ? 'ok' : (mode === 'error' ? 'error' : 'warning'));
+  const summary = explicitSummary || formatLogSummary(text, statusMode);
+  state.lastStatusSummary = summary;
+  state.lastStatusMode = statusMode;
+
+  if (els.connectionStatus) {
+    els.connectionStatus.className = `ghost compact log-btn status-pill ${statusMode}`;
+    els.connectionStatus.title = `Trạng thái: ${summary} (${text}) - Bấm để xem log chi tiết`;
+    const labelEl = els.connectionStatus.querySelector('.log-status-text');
+    if (labelEl) {
+      labelEl.textContent = summary;
+    } else {
+      els.connectionStatus.innerHTML = `<svg class="top-btn-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg><span class="status-dot" aria-hidden="true"></span><span id="logStatusText" class="log-status-text">${escapeHtml(summary)}</span>`;
+    }
+  }
+  const timestamp = new Date().toLocaleTimeString('vi-VN');
+  const logLine = `[${timestamp}] [${summary.toUpperCase()}] ${text}`;
+  if (!state.logs) state.logs = [];
+  state.logs.push(logLine);
+  if (state.logs.length > 100) state.logs.shift();
 }
 
 function showError(message) {

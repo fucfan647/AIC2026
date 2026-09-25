@@ -37,19 +37,27 @@ function renderStages() {
     const stageOcrPercent = normalizeOcrPercent(stage.ocrWeight, 41);
     const stageAsrPercent = normalizeAsrPercent(stage.asrWeight, 20);
     const card = document.createElement('section');
-    card.className = 'stage-card';
+    card.className = 'stage-card' + (state.stages.length > 1 ? ' has-remove-btn' : '');
     card.dataset.stageId = stage.id;
     card.innerHTML = `
-      <div class="stage-head${isCompletedTemporalStage ? ' is-collapsible' : ''}" ${isCompletedTemporalStage ? `role="button" tabindex="0" aria-expanded="${stage.temporalExpanded === true}" title="Bấm để ${stage.temporalExpanded === true ? 'thu gọn' : 'chỉnh sửa'} Query ${stageLetter(index)}"` : ''}>
-        <div>${isCompletedTemporalStage ? '<span class="badge">Đã tìm</span>' : ''}</div>
-        ${state.stages.length > 1 ? `<button class="stage-remove" type="button" title="Xóa Query ${stageLetter(index)}" aria-label="Xóa Query ${stageLetter(index)}">${trashIcon()}</button>` : ''}
-      </div>
-      <div class="stage-fields" ${isCompletedTemporalStage && stage.temporalExpanded !== true ? 'hidden' : ''}>
-        <label class="text-query-field">
-          <span class="query-field-heading"><b class="query-field-icon" aria-hidden="true">${stageLetter(index)}</b>Text Query</span>
+      <div class="stage-fields" ${isCompletedTemporalStage && stage.temporalExpanded === false ? 'hidden' : ''}>
+        <div class="text-query-field">
+          <div class="query-field-header">
+            <div style="display: flex; align-items: center; gap: 6px;">
+              ${isCompletedTemporalStage ? '<span class="badge" style="padding: 2px 6px; font-size: 11px; line-height: 1;">Đã tìm</span>' : ''}
+              <span class="query-field-heading"><b class="query-field-icon" aria-hidden="true">${stageLetter(index)}</b>Text Query</span>
+            </div>
+            <div style="display: flex; align-items: center; gap: 4px;">
+              <button class="auto-translate-switch${state.autoTranslate ? ' is-active' : ''}" type="button" role="switch" aria-checked="${state.autoTranslate ? 'true' : 'false'}" title="${state.autoTranslate ? 'Auto Dịch tiếng Anh đang BẬT (Phím tắt: Alt+T). Bấm để tắt.' : 'Auto Dịch tiếng Anh đang TẮT (Phím tắt: Alt+T). Bấm để bật.'}">
+                <span class="translate-logo-icon" aria-hidden="true">${translateLogoSvg()}</span>
+                <span class="toggle-track"><span class="toggle-thumb"></span></span>
+              </button>
+              ${state.stages.length > 1 ? `<button class="stage-remove" type="button" title="Xóa Query ${stageLetter(index)}" aria-label="Xóa Query ${stageLetter(index)}">${trashIcon()}</button>` : ''}
+            </div>
+          </div>
           <textarea class="text-query" placeholder="Mô tả hành động ${stageLetter(index)}..."></textarea>
           <div class="translated-query-row" ${stage.translatedQuery ? '' : 'hidden'}><strong>English:</strong> <span class="translated-query-text"></span></div>
-        </label>
+        </div>
 
         <label class="ocr-query-field">
           <span class="query-field-heading"><b class="query-field-icon" aria-hidden="true">${ocrQueryIcon()}</b>OCR Query</span>
@@ -64,8 +72,6 @@ function renderStages() {
         </label>
         <output class="stage-asr-weight-value" hidden>${stageAsrPercent}%</output>
         <input class="stage-asr-weight" type="range" min="0" max="100" value="${stageAsrPercent}" step="1" aria-label="Độ chú trọng ASR Query ${stageNumber}" />
-
-        <small class="fusion-weight-summary"></small>
 
         ${isCompletedTemporalStage ? `<button class="translate-query-btn" type="button" data-temporal-search-stage="${index}">Tìm lại Query ${stageLetter(index)}</button>` : ''}
       </div>`;
@@ -96,7 +102,7 @@ function renderStages() {
     if (isCompletedTemporalStage) {
       const stageHead = card.querySelector('.stage-head');
       const toggleCompletedStage = () => {
-        stage.temporalExpanded = stage.temporalExpanded !== true;
+        stage.temporalExpanded = stage.temporalExpanded === false;
         renderStages();
       };
       stageHead?.addEventListener('click', toggleCompletedStage);
@@ -216,6 +222,11 @@ function renderStages() {
 
     updateStageFusionSummary();
     card.querySelector('.stage-remove')?.addEventListener('click', () => removeStage(stage.id));
+    card.querySelector('.auto-translate-switch')?.addEventListener('click', event => {
+      event.preventDefault();
+      event.stopPropagation();
+      toggleAutoTranslate();
+    });
     card.querySelector('[data-temporal-search-stage]')?.addEventListener('click', () => performSearch(index));
 
     els.stageList.appendChild(card);
@@ -243,6 +254,22 @@ function setSimilarityItem(item) {
     els.globalSimilarityDropzone.innerHTML = `<img src="${escapeHtml(imageUrl)}" alt="${escapeHtml(item.video_id)}" style="width: 100%; height: auto; display: block; border-radius: 4px;" title="Đã chọn: ${escapeHtml(item.video_id)} - Frame ${escapeHtml(frameId(item))}" />`;
   }
   showError('');
+}
+
+function addFrameToImageQuery(item) {
+  if (!item?.keyframe_id || !item?.video_id) {
+    showError('Frame không hợp lệ.');
+    return;
+  }
+  setSimilarityItem(item);
+  if (els.globalSimilarityPopover && els.globalSimilarityPopover.hidden) {
+    els.globalSimilarityPopover.hidden = false;
+    if (els.globalSimilarityBtn) {
+      els.globalSimilarityBtn.setAttribute('aria-expanded', 'true');
+      els.globalSimilarityBtn.classList.add('is-active');
+    }
+  }
+  setStatus(`Đã thêm ${item.video_id} (#${frameId(item)}) vào Image Query`, 'ok');
 }
 
 function invalidateTemporalResults() {
@@ -284,7 +311,8 @@ function addTemporalStage() {
     asrWeight: normalizeAsrPercent(
       state.stages[state.stages.length - 1]?.asrWeight,
       20
-    )
+    ),
+    temporalExpanded: true
   });
 
   // Render UI ngay lập tức để người dùng thấy Tab B được thêm vào
@@ -390,14 +418,61 @@ function syncEmbeddingModelControls() {
   syncAutoTranslateControls();
 }
 
+function translateLogoSvg() {
+  return `<svg class="translate-logo-svg" width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+  <defs>
+    <linearGradient id="transWarmGrad" x1="2" y1="2" x2="13" y2="13" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#B85860"/>
+      <stop offset="1" stop-color="#8F373E"/>
+    </linearGradient>
+  </defs>
+  <rect x="8.5" y="4" width="13" height="14.5" rx="2.5" fill="#FFF5F4" stroke="#ECD4D0" stroke-width="1.2"/>
+  <text x="15" y="14.8" font-size="8.5" font-family="'Noto Sans', 'Segoe UI', system-ui, sans-serif" font-weight="700" fill="#8F373E" text-anchor="middle">文</text>
+  <path d="M9.5 13.8L13.5 9.8V14.5C13.5 15.3 12.7 15.6 11.5 15L9.5 13.8Z" fill="#6B2228"/>
+  <path d="M3.5 3C2.67 3 2 3.67 2 4.5V12.3C2 13.13 2.67 13.8 3.5 13.8H9.5L13.5 9.8V4.5C13.5 3.67 12.83 3 12 3H3.5Z" fill="url(#transWarmGrad)"/>
+  <text x="7.2" y="10.4" font-size="8" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-weight="800" fill="#FFFFFF" text-anchor="middle">G</text>
+</svg>`;
+}
+
+function toggleAutoTranslate() {
+  state.autoTranslate = !state.autoTranslate;
+  try {
+    localStorage.setItem('aic_auto_translate', String(state.autoTranslate));
+  } catch (_) {}
+  if (!state.autoTranslate) {
+    state.stages.forEach(stage => {
+      stage.translatedQuery = '';
+    });
+    document.querySelectorAll('.translated-query-row').forEach(row => {
+      row.hidden = true;
+    });
+  }
+  syncAutoTranslateControls();
+  if (typeof setStatus === 'function') {
+    setStatus(
+      state.autoTranslate
+        ? 'Đã BẬT tự động dịch tiếng Anh (Alt+T).'
+        : 'Đã TẮT tự động dịch tiếng Anh (Alt+T).',
+      'ok'
+    );
+  }
+}
+
 function syncAutoTranslateControls() {
   const enabled = Boolean(state.autoTranslate);
+  document.querySelectorAll('.auto-translate-switch').forEach(btn => {
+    btn.classList.toggle('is-active', enabled);
+    btn.setAttribute('aria-checked', enabled ? 'true' : 'false');
+    btn.title = enabled
+      ? 'Auto Dịch tiếng Anh đang BẬT (Phím tắt: Alt+T). Bấm để tắt.'
+      : 'Auto Dịch tiếng Anh đang TẮT (Phím tắt: Alt+T). Bấm để bật tự động dịch.';
+  });
   if (els.autoTranslateToggle) {
     els.autoTranslateToggle.classList.toggle('is-active', enabled);
     els.autoTranslateToggle.setAttribute('aria-pressed', enabled ? 'true' : 'false');
     els.autoTranslateToggle.title = enabled
-      ? 'Auto Dịch tiếng Anh đang BẬT (tự động dịch query trước khi tìm kiếm). Bấm để tắt.'
-      : 'Auto Dịch tiếng Anh đang TẮT. Bấm để bật tự động dịch câu query tiếng Việt sang tiếng Anh trước khi tìm kiếm.';
+      ? 'Auto Dịch tiếng Anh đang BẬT (Phím tắt: Alt+T). Bấm để tắt.'
+      : 'Auto Dịch tiếng Anh đang TẮT (Phím tắt: Alt+T). Bấm để bật tự động dịch câu query tiếng Việt sang tiếng Anh trước khi tìm kiếm.';
   }
   if (els.autoTranslateLabel) {
     els.autoTranslateLabel.textContent = enabled ? 'Auto EN: BẬT' : 'Auto EN: Tắt';
@@ -414,8 +489,14 @@ async function refreshHealth() {
       state.embeddingModel = 'metaclip';
     }
     const ocrModels = health.ocr_models || {};
-    if (state.ocrModel !== 'ppocr' && ocrModels[state.ocrModel]?.available !== true) {
-      state.ocrModel = 'ppocr';
+    if (state.ocrModel && ocrModels[state.ocrModel]?.available !== true) {
+      if (ocrModels['union']?.available) {
+        state.ocrModel = 'union';
+      } else if (ocrModels['ppocr']?.available) {
+        state.ocrModel = 'ppocr';
+      } else if (ocrModels['monkey']?.available) {
+        state.ocrModel = 'monkey';
+      }
     }
     const defaults = health.default_fusion_weights;
     if (!state.fusionWeightsTouched && defaults && Number(defaults.metaclip) + Number(defaults.ocr) > 0) {
@@ -537,6 +618,7 @@ if (typeof window !== "undefined") {
   try { window.renderStages = renderStages; } catch (_) {}
   try { window.setQueryMode = setQueryMode; } catch (_) {}
   try { window.setSimilarityItem = setSimilarityItem; } catch (_) {}
+  try { window.addFrameToImageQuery = addFrameToImageQuery; } catch (_) {}
   try { window.invalidateTemporalResults = invalidateTemporalResults; } catch (_) {}
   try { window.addTemporalStage = addTemporalStage; } catch (_) {}
   try { window.removeStage = removeStage; } catch (_) {}
@@ -551,6 +633,7 @@ if (typeof window !== "undefined") {
   try { window.syncSearchModeControls = syncSearchModeControls; } catch (_) {}
   try { window.syncEmbeddingModelControls = syncEmbeddingModelControls; } catch (_) {}
   try { window.syncAutoTranslateControls = syncAutoTranslateControls; } catch (_) {}
+  try { window.toggleAutoTranslate = toggleAutoTranslate; } catch (_) {}
   try { window.refreshHealth = refreshHealth; } catch (_) {}
   try { window.sortResults = sortResults; } catch (_) {}
   try { window.groupShotSuggestions = groupShotSuggestions; } catch (_) {}

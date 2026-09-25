@@ -59,6 +59,10 @@ function zoomIcon() {
   return '<i data-lucide="zoom-in" aria-hidden="true"></i>';
 }
 
+function imageQueryIcon() {
+  return '<i data-lucide="image" aria-hidden="true"></i>';
+}
+
 function submitIcon() {
   return '<i data-lucide="send" aria-hidden="true"></i>';
 }
@@ -833,6 +837,7 @@ if (typeof window !== "undefined") {
   try { window.submitIcon = submitIcon; } catch (_) {}
   try { window.refreshIcons = refreshIcons; } catch (_) {}
   try { window.updateVideoControls = updateVideoControls; } catch (_) {}
+  try { window.imageQueryIcon = imageQueryIcon; } catch (_) {}
   try { window.setVideoRate = setVideoRate; } catch (_) {}
   try { window.closeVideoControlPopovers = closeVideoControlPopovers; } catch (_) {}
   try { window.toggleVideoControlPopover = toggleVideoControlPopover; } catch (_) {}

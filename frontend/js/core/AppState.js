@@ -20,7 +20,7 @@ export class AppState {
     this.data = {
       searchMode: 'temporal',
       embeddingModel: 'metaclip',
-      ocrModel: 'monkey',
+      ocrModel: 'union',
       queryMode: 'text',
       similarityItem: null,
       similarityQuery: '',

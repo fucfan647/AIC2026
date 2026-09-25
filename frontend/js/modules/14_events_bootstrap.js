@@ -25,7 +25,9 @@ if (els.themeToggleBtn) {
 els.embeddingModelToggle.addEventListener('click', async () => {
   if (els.embeddingModelToggle.disabled) return;
   const previousSessionId = state.temporalSessionId;
-  state.embeddingModel = state.embeddingModel === 'metaclip' ? 'beit3' : 'metaclip';
+  const models = ['metaclip', 'beit3', 'siglip2'];
+  const currentIndex = models.indexOf(state.embeddingModel);
+  state.embeddingModel = models[(currentIndex + 1) % models.length];
   if (state.searchMode === 'temporal' && previousSessionId) {
     try {
       await fetch('/temporal-search', {
@@ -41,27 +43,26 @@ els.embeddingModelToggle.addEventListener('click', async () => {
     invalidateTemporalResults();
     renderStages();
     syncSearchModeControls();
-    setLog(`Đã đổi sang ${state.embeddingModel === 'beit3' ? 'BEiT-3' : 'MetaCLIP-2'}; hãy tìm lại từ Query A.`);
+    setLog(`Đã đổi sang ${getEmbeddingModelLabel(state.embeddingModel)}; hãy tìm lại từ Query A.`);
     setStatus(state.backend ? 'Đã kết nối' : 'Sẵn sàng.', state.backend ? 'ok' : 'neutral');
   }
   syncEmbeddingModelControls();
+  setStatus(`Mô hình: ${getEmbeddingModelLabel(state.embeddingModel)} (Alt+M)`, 'ok');
 });
 
 if (els.autoTranslateToggle) {
   els.autoTranslateToggle.addEventListener('click', () => {
-    state.autoTranslate = !state.autoTranslate;
-    try {
-      localStorage.setItem('aic_auto_translate', String(state.autoTranslate));
-    } catch (_) {}
-    if (typeof syncAutoTranslateControls === 'function') {
-      syncAutoTranslateControls();
+    if (typeof toggleAutoTranslate === 'function') {
+      toggleAutoTranslate();
+    } else {
+      state.autoTranslate = !state.autoTranslate;
+      try {
+        localStorage.setItem('aic_auto_translate', String(state.autoTranslate));
+      } catch (_) {}
+      if (typeof syncAutoTranslateControls === 'function') {
+        syncAutoTranslateControls();
+      }
     }
-    setStatus(
-      state.autoTranslate
-        ? 'Đã BẬT tự động dịch tiếng Anh trước khi tìm kiếm.'
-        : 'Đã TẮT tự động dịch tiếng Anh.',
-      'ok'
-    );
   });
 }
 
@@ -180,13 +181,8 @@ els.selectionTray.addEventListener('drop', event => {
   }
 });
 
-els.submissionModeToggle.addEventListener('click', (e) => {
-  const target = e.target.closest('[data-mode]');
-  if (target && target.dataset.mode === 'dres' && state.submissionMode === 'dres') {
-    openDresModal();
-    return;
-  }
-  toggleSubmissionMode();
+els.submissionModeToggle.addEventListener('click', () => {
+  openDresModal();
 });
 els.qaAnswer.addEventListener('keydown', event => {
   if (event.key === 'Enter' && !event.isComposing) {
@@ -203,6 +199,25 @@ document.querySelector('[data-close-timing]').addEventListener('click', closeTim
 if (els.shortcutsBtn) els.shortcutsBtn.addEventListener('click', openShortcutsModal);
 if (els.closeShortcutsBtn) els.closeShortcutsBtn.addEventListener('click', closeShortcutsModal);
 document.querySelector('[data-close-shortcuts]')?.addEventListener('click', closeShortcutsModal);
+if (els.quickNoteBtn) els.quickNoteBtn.addEventListener('click', toggleQuickNoteModal);
+if (els.closeQuickNoteBtn) els.closeQuickNoteBtn.addEventListener('click', closeQuickNoteModal);
+if (els.quickNoteModal) {
+  els.quickNoteModal.querySelector('[data-close-note]')?.addEventListener('click', closeQuickNoteModal);
+}
+if (els.quickNoteTextarea) {
+  els.quickNoteTextarea.value = localStorage.getItem('aic_user_quick_note') || '';
+  els.quickNoteTextarea.addEventListener('input', () => {
+    localStorage.setItem('aic_user_quick_note', els.quickNoteTextarea.value);
+  });
+}
+if (els.clearQuickNoteBtn) {
+  els.clearQuickNoteBtn.addEventListener('click', () => {
+    if (confirm('Bạn có chắc muốn xóa toàn bộ ghi chú không?')) {
+      localStorage.removeItem('aic_user_quick_note');
+      if (els.quickNoteTextarea) els.quickNoteTextarea.value = '';
+    }
+  });
+}
 els.dresOpenBtn.addEventListener('click', openDresModal);
 els.closeDresBtn.addEventListener('click', closeDresModal);
 document.querySelector('[data-close-dres]').addEventListener('click', closeDresModal);
@@ -313,6 +328,22 @@ document.addEventListener('keydown', event => {
   const inInput = event.target.matches('input, textarea');
   const key = event.key.toLowerCase();
 
+  // Tab key toggles Quick Note (works globally when not in another input, and inside note to close)
+  if (event.key === 'Tab' && !event.altKey && !event.ctrlKey && !event.metaKey) {
+    if (els.quickNoteModal && !els.quickNoteModal.hidden) {
+      event.preventDefault();
+      event.stopPropagation();
+      closeQuickNoteModal();
+      return;
+    }
+    if (!inInput) {
+      event.preventDefault();
+      event.stopPropagation();
+      openQuickNoteModal();
+      return;
+    }
+  }
+
   // Shift + K / T / Q (when not actively typing text inside an input or textarea)
   if (!inInput && event.shiftKey && !event.ctrlKey && !event.altKey && !event.metaKey) {
     if (key === 'k') {
@@ -339,7 +370,7 @@ document.addEventListener('keydown', event => {
       setTaskType('kis');
       return;
     }
-    if (key === '2' || key === 't') {
+    if (key === '2') {
       event.preventDefault();
       setTaskType('trake');
       return;
@@ -349,7 +380,12 @@ document.addEventListener('keydown', event => {
       setTaskType('qa');
       return;
     }
-    if (key === 'e') {
+    if (key === 'm') {
+      event.preventDefault();
+      els.embeddingModelToggle?.click();
+      return;
+    }
+    if (key === 't' || key === 'e') {
       event.preventDefault();
       state.autoTranslate = !state.autoTranslate;
       try {
@@ -360,8 +396,8 @@ document.addEventListener('keydown', event => {
       }
       setStatus(
         state.autoTranslate
-          ? 'Đã BẬT tự động dịch tiếng Anh (Alt+E).'
-          : 'Đã TẮT tự động dịch tiếng Anh (Alt+E).',
+          ? 'Đã BẬT tự động dịch tiếng Anh (Alt+T).'
+          : 'Đã TẮT tự động dịch tiếng Anh (Alt+T).',
         'ok'
       );
       return;
@@ -422,6 +458,31 @@ document.addEventListener('keydown', event => {
     cycleTaskType();
     return;
   }
+  if (key === 'i') {
+    let target = null;
+    if (els.imageModal && !els.imageModal.hidden && state.imageItem) {
+      target = state.imageItem;
+    } else if (els.videoModal && !els.videoModal.hidden && state.activeVideoItem) {
+      target = getDisplayedVideoFrameItem() || state.activeVideoItem;
+    } else if (state.hoveredCardItem) {
+      target = state.hoveredCardItem;
+    } else {
+      const hoveredCard = document.querySelector('.card:hover, .video-frame-gallery-card:hover');
+      if (hoveredCard) {
+        const btn = hoveredCard.querySelector('[data-card-action="image-query"], [data-frame-action="image-query"]');
+        if (btn) {
+          event.preventDefault();
+          btn.click();
+          return;
+        }
+      }
+    }
+    if (target) {
+      event.preventDefault();
+      addFrameToImageQuery(target);
+      return;
+    }
+  }
   if (event.key === '?' || (event.key === '/' && event.shiftKey)) {
     event.preventDefault();
     if (els.shortcutsModal && !els.shortcutsModal.hidden) {
@@ -459,6 +520,12 @@ document.addEventListener('keydown', event => {
     return;
   }
   if (event.key !== 'Escape') return;
+  if (els.quickNoteModal && !els.quickNoteModal.hidden) {
+    event.preventDefault();
+    event.stopPropagation();
+    closeQuickNoteModal();
+    return;
+  }
   if (els.shortcutsModal && !els.shortcutsModal.hidden) {
     event.preventDefault();
     event.stopPropagation();
@@ -495,6 +562,12 @@ document.addEventListener('keydown', event => {
     closeShotOverview();
     return;
   }
+  if (els.frameOverviewModal && !els.frameOverviewModal.hidden) {
+    event.preventDefault();
+    event.stopPropagation();
+    closeFrameOverview();
+    return;
+  }
   if (els.videoModal.hidden) return;
   event.preventDefault();
   event.stopPropagation();
@@ -507,7 +580,7 @@ syncEmbeddingModelControls();
 syncFusionWeights();
 renderResults();
 renderSelection();
-state.submissionMode = localStorage.getItem(SUBMISSION_MODE_CACHE_KEY) === 'csv' ? 'csv' : 'dres';
+state.submissionMode = 'dres';
 loadDresCache();
 loadMemberCache();
 renderEvaluations();
@@ -542,7 +615,12 @@ els.qaAnswer.addEventListener('input', () => {
     }, 600);
   }
 });
-els.memberNameBtn?.addEventListener('click', openDresModal);
+els.memberNameBtn?.addEventListener('click', () => {
+  if (state.dresSessionId && state.dresSelectedEvaluationId) {
+    state.dresNameConfirmed = false;
+  }
+  openDresModal();
+});
 els.statsOpenBtn?.addEventListener('click', openStatsModal);
 els.closeStatsBtn?.addEventListener('click', closeStatsModal);
 document.querySelector('[data-close-stats]')?.addEventListener('click', closeStatsModal);
