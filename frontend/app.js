@@ -625,6 +625,7 @@ const TIMING_ROWS = [
   ['ocr_search_ms', 'Tìm kiếm văn bản OCR', 'Tìm các frame có nội dung chữ khớp với truy vấn trong chỉ mục OCR.'],
   ['asr_search_ms', 'Tìm kiếm lời nói ASR', 'Tìm các đoạn transcript khớp với truy vấn và ánh xạ về shot đại diện.'],
   ['fusion_ms', 'Ghép điểm các nguồn', 'Kết hợp thứ hạng hình ảnh, OCR và ASR theo các trọng số đã chọn.'],
+  ['result_scoring_ms', 'Chuẩn bị điểm kết quả', 'Gắn điểm cosine có sẵn vào kết quả mà không đọc lại embedding.'],
   ['anchor_search_ms', 'Tìm hành động anchor', 'Truy hồi toàn cục cho hành động nằm giữa chuỗi.'],
   ['local_stage_search_ms', 'Chấm các vùng lân cận', 'Chấm những shot trước và sau anchor có thể tạo thành chuỗi hợp lệ.'],
   ['stage_search_ms', 'Tổng tìm kiếm temporal', 'Tổng thời gian tìm anchor và chấm các vùng shot lân cận.'],
@@ -4144,7 +4145,10 @@ async function performSearch(requestedTemporalStageIndex = null, translatedQuery
     && ((!query && !ocrQuery && !asrQuery) || state.queryMode === 'similarity');
   const videoFilter = collectVideoFilter();
   const top_k = searchTopK();
-  const requestTopK = !temporal && !multi ? top_k * 3 : top_k;
+  // The backend performs per-result metadata and cosine work after vector
+  // retrieval. Asking for 3x more rows made a normal 200-result search process
+  // 600 rows and added significant latency on the remote embedding store.
+  const requestTopK = top_k;
   const invalidMultiQuery = multi && (
     queries.length < 2
     || queries.length > 5
@@ -4164,6 +4168,9 @@ async function performSearch(requestedTemporalStageIndex = null, translatedQuery
   }
   showError('');
   setStatus('Đang tìm', 'searching');
+  // Remove result images immediately so the browser cancels thumbnail reads
+  // from the previous query instead of queueing /search behind those requests.
+  els.results.replaceChildren();
   try {
     await clearCorrectSubmissionFeedback();
     const clientStarted = performance.now();

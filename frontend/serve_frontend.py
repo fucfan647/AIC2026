@@ -995,14 +995,19 @@ def create_app(
     ]
     for c in candidate_roots:
         if c is not None and c.exists():
-            for sub in [
+            # Resource ZIPs often contain repeated ``synthetic_frames`` folders.
+            # Try the deepest existing folder first so each image normally needs
+            # one filesystem lookup instead of probing every wrapper directory.
+            sub_candidates = [
                 c,
                 c / "synthetic_frames",
                 c / "synthetic_frames" / "synthetic_frames",
                 c / "synthetic_frames_webp",
                 c / "keyframes",
                 c / "keyframes_AIC_2026",
-            ]:
+            ]
+            sub_candidates.sort(key=lambda path: len(path.parts), reverse=True)
+            for sub in sub_candidates:
                 if sub.is_dir() and sub not in LOCAL_KEYFRAME_ROOTS:
                     LOCAL_KEYFRAME_ROOTS.append(sub)
             try:

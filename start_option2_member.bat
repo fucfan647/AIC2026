@@ -16,7 +16,7 @@ echo =====================================================================
 
 :: 1. CẤU HÌNH ĐƯỜNG DẪN ẢNH SSD TRÊN MÁY BẠN
 :: Thay đổi đường dẫn tới thư mục keyframe trên SSD của bạn:
-set "KEYFRAMES_DIR=C:\uit\aic2026_resources\synthetic_frames\synthetic_frames"
+set "KEYFRAMES_DIR=C:\uit\aic2026_resources\synthetic_frames\synthetic_frames\synthetic_frames"
 set "RECORDS_PATH=C:\uit\aic2026_resources\aic_resource\01_records_db\backend\artifacts\current_index\records.sqlite"
 set "ASR_INDEX=C:\uit\aic2026_resources\aic_resource\10_asr_index\backend\artifacts\asr_index\asr.sqlite"
 

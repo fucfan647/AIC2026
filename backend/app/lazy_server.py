@@ -760,6 +760,10 @@ def make_handler(runtime: Runtime):
                 result = {
                         "rank": len(results) + 1,
                         "score": float(score),
+                        # Preserve the cosine score returned by the vector index.
+                        # Re-reading each selected embedding later is redundant
+                        # and is especially expensive when embeddings live on NAS.
+                        "visual_score": float(score),
                         "keyframe_id": rec["keyframe_id"],
                         "video_id": rec["video_id"],
                         "shot_id": rec.get("shot_id"),
@@ -848,11 +852,13 @@ def make_handler(runtime: Runtime):
                 )
                 fusion_ms += (time.perf_counter() - fusion_started) * 1000.0
                 total_matches = len({item["keyframe_id"] for item in base_results} | {hit.keyframe_id for hit in asr_hits})
+            result_scoring_started = time.perf_counter()
             if query_vector is not None:
                 for item in results:
-                    row_id = int(item["source_embedding_row"])
-                    embedding = np.asarray(search_state.embeddings[row_id], dtype=np.float32)
-                    item["cosine_similarity"] = float(np.dot(embedding, query_vector))
+                    visual_score = item.get("visual_score")
+                    if visual_score is not None:
+                        item["cosine_similarity"] = float(visual_score)
+            result_scoring_ms = (time.perf_counter() - result_scoring_started) * 1000.0
             total_ms = (time.perf_counter() - started) * 1000.0
             search_backend = (f"{search_state.index.backend}+ocr_filter_fts5" if has_semantic_query else "ocr_fts5") if use_ocr_filter else (f"{search_state.index.backend}+ocr_fts5" if use_ocr and metaclip_weight > 0 else ("ocr_fts5" if use_ocr else search_state.index.backend))
             if use_asr:
@@ -890,6 +896,7 @@ def make_handler(runtime: Runtime):
                         "ocr_search_ms": round(ocr_search_ms, 3),
                         "asr_search_ms": round(asr_search_ms, 3),
                         "fusion_ms": round(fusion_ms, 3),
+                        "result_scoring_ms": round(result_scoring_ms, 3),
                         "total_ms": round(total_ms, 3),
                     },
                 },

@@ -12,7 +12,7 @@ echo =====================================================================
 
 :: 1. CẤU HÌNH ĐƯỜNG DẪN ẢNH SSD TRÊN MÁY BẠN
 :: Thay đổi đường dẫn tới thư mục ảnh synthetic_frames_webp trên SSD của bạn:
-set "KEYFRAMES_DIR=C:\uit\aic2026_resources\synthetic_frames\synthetic_frames"
+set "KEYFRAMES_DIR=C:\uit\aic2026_resources\synthetic_frames\synthetic_frames\synthetic_frames"
 
 :: Địa chỉ máy chạy Team Hub, Backend proxy và HLS trong Option 1.
 set "SERVER_IP=192.168.20.156"
