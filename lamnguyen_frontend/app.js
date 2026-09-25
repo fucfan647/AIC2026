@@ -1,7 +1,7 @@
 const state = {
   searchMode: 'temporal',
   embeddingModel: 'metaclip',
-  ocrModel: 'monkey',
+  ocrModel: 'union',
   queryMode: 'text',
   similarityItem: null,
   similarityQuery: '',
@@ -17,6 +17,7 @@ const state = {
   dresSessionId: null,
   dresEvaluations: [],
   dresSelectedEvaluationId: '',
+  dresNameConfirmed: false,
   dresUsername: '',
   dresServerUrl: 'http://192.168.28.151:5000',
   submissionMode: 'dres',
@@ -84,6 +85,11 @@ const els = {
   activeQueryContent: document.getElementById('activeQueryContent'),
   videoActiveQueryContent: document.getElementById('videoActiveQueryContent'),
   globalSimilarityBtn: document.getElementById('globalSimilarityBtn'),
+  quickNoteBtn: document.getElementById('quickNoteBtn'),
+  quickNoteModal: document.getElementById('quickNoteModal'),
+  quickNoteTextarea: document.getElementById('quickNoteTextarea'),
+  closeQuickNoteBtn: document.getElementById('closeQuickNoteBtn'),
+  clearQuickNoteBtn: document.getElementById('clearQuickNoteBtn'),
   globalSimilarityPopover: document.getElementById('globalSimilarityPopover'),
   globalSimilarityDropzone: document.getElementById('globalSimilarityDropzone'),
   globalSimilarityQuery: document.getElementById('globalSimilarityQuery'),
@@ -201,8 +207,19 @@ function stageLetter(index) {
 
 function setStatus(text, mode = 'neutral') {
   els.status.textContent = text;
-  els.connectionStatus.textContent = mode === 'searching' ? 'Đang tìm' : text;
-  els.connectionStatus.className = `status-pill ${mode === 'ok' ? 'ok' : mode === 'error' ? 'error' : 'warning'}`;
+  const statusMode = mode === 'searching' ? 'searching' : (mode === 'ok' ? 'ok' : (mode === 'error' ? 'error' : 'warning'));
+  if (els.connectionStatus) {
+    els.connectionStatus.className = `ghost compact log-btn status-pill ${statusMode}`;
+    els.connectionStatus.title = `Trạng thái: ${text} (Bấm để xem log)`;
+    if (!els.connectionStatus.querySelector('svg')) {
+      els.connectionStatus.innerHTML = `<svg class="top-btn-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg><span class="status-dot" aria-hidden="true"></span>`;
+    }
+  }
+  const timestamp = new Date().toLocaleTimeString('vi-VN');
+  const logLine = `[${timestamp}] [${statusMode.toUpperCase()}] ${text}`;
+  if (!state.logs) state.logs = [];
+  state.logs.push(logLine);
+  if (state.logs.length > 100) state.logs.shift();
 }
 
 function showError(message) {
@@ -569,7 +586,16 @@ async function clearCorrectSubmissionFeedback() {
 }
 
 function openLogModal() {
-  els.logContent.textContent = state.lastLog || 'Chưa có log.';
+  if (state.logs && state.logs.length > 0) {
+    const statusLogs = state.logs.join('\n');
+    if (state.lastLog && state.lastLog !== 'Chưa có log.') {
+      els.logContent.textContent = statusLogs + '\n\n--- Chi tiết phản hồi ---\n' + state.lastLog;
+    } else {
+      els.logContent.textContent = statusLogs;
+    }
+  } else {
+    els.logContent.textContent = state.lastLog || 'Chưa có log.';
+  }
   els.logModal.hidden = false;
 }
 
@@ -808,6 +834,35 @@ function openShortcutsModal() {
   if (els.shortcutsModal) els.shortcutsModal.hidden = false;
 }
 
+const NOTE_STORAGE_KEY = 'aic_user_quick_note';
+
+function openQuickNoteModal() {
+  if (!els.quickNoteModal) return;
+  els.quickNoteModal.hidden = false;
+  els.quickNoteBtn?.classList.add('is-active');
+  els.quickNoteBtn?.setAttribute('aria-expanded', 'true');
+  if (els.quickNoteTextarea) {
+    els.quickNoteTextarea.value = localStorage.getItem(NOTE_STORAGE_KEY) || '';
+    setTimeout(() => els.quickNoteTextarea.focus(), 30);
+  }
+}
+
+function closeQuickNoteModal() {
+  if (!els.quickNoteModal) return;
+  els.quickNoteModal.hidden = true;
+  els.quickNoteBtn?.classList.remove('is-active');
+  els.quickNoteBtn?.setAttribute('aria-expanded', 'false');
+}
+
+function toggleQuickNoteModal() {
+  if (!els.quickNoteModal) return;
+  if (els.quickNoteModal.hidden) {
+    openQuickNoteModal();
+  } else {
+    closeQuickNoteModal();
+  }
+}
+
 function closeShortcutsModal() {
   if (els.shortcutsModal) els.shortcutsModal.hidden = true;
 }
@@ -845,11 +900,11 @@ function renderStages() {
     card.className = 'stage-card';
     card.dataset.stageId = stage.id;
     card.innerHTML = `
-      <div class="stage-head${isCompletedTemporalStage ? ' is-collapsible' : ''}" ${isCompletedTemporalStage ? `role="button" tabindex="0" aria-expanded="${stage.temporalExpanded === true}" title="Bấm để ${stage.temporalExpanded === true ? 'thu gọn' : 'chỉnh sửa'} Query ${stageLetter(index)}"` : ''}>
+      <div class="stage-head${isCompletedTemporalStage ? ' is-collapsible' : ''}" ${isCompletedTemporalStage ? `role="button" tabindex="0" aria-expanded="${stage.temporalExpanded !== false}" title="Bấm để ${stage.temporalExpanded === false ? 'mở rộng' : 'thu gọn'} Query ${stageLetter(index)}"` : ''}>
         <div>${isCompletedTemporalStage ? '<span class="badge">Đã tìm</span>' : ''}</div>
         ${state.stages.length > 1 ? `<button class="stage-remove" type="button" title="Xóa Query ${stageLetter(index)}" aria-label="Xóa Query ${stageLetter(index)}">${trashIcon()}</button>` : ''}
       </div>
-      <div class="stage-fields" ${isCompletedTemporalStage && stage.temporalExpanded !== true ? 'hidden' : ''}>
+      <div class="stage-fields" ${isCompletedTemporalStage && stage.temporalExpanded === false ? 'hidden' : ''}>
         <label class="text-query-field">
           <span class="query-field-heading"><b class="query-field-icon" aria-hidden="true">${stageLetter(index)}</b>Text Query</span>
           <textarea class="text-query" placeholder="Mô tả hành động ${stageLetter(index)}..."></textarea>
@@ -868,8 +923,6 @@ function renderStages() {
         </label>
         <output class="stage-asr-weight-value" hidden>${stageAsrPercent}%</output>
         <input class="stage-asr-weight" type="range" min="0" max="100" value="${stageAsrPercent}" step="1" aria-label="Độ chú trọng ASR Query ${stageNumber}" />
-
-        <small class="fusion-weight-summary"></small>
 
         ${isCompletedTemporalStage ? `<button class="translate-query-btn" type="button" data-temporal-search-stage="${index}">Tìm lại Query ${stageLetter(index)}</button>` : ''}
       </div>`;
@@ -893,7 +946,7 @@ function renderStages() {
     if (isCompletedTemporalStage) {
       const stageHead = card.querySelector('.stage-head');
       const toggleCompletedStage = () => {
-        stage.temporalExpanded = stage.temporalExpanded !== true;
+        stage.temporalExpanded = stage.temporalExpanded === false;
         renderStages();
       };
       stageHead?.addEventListener('click', toggleCompletedStage);
@@ -1087,7 +1140,8 @@ function addTemporalStage() {
     asrWeight: normalizeAsrPercent(
       state.stages[state.stages.length - 1]?.asrWeight,
       20
-    )
+    ),
+    temporalExpanded: true
   });
 
   // Render UI ngay lập tức để người dùng thấy Tab B được thêm vào
@@ -1139,16 +1193,23 @@ function syncSearchModeControls() {
 
 }
 
+function getEmbeddingModelLabel(model) {
+  if (model === 'beit3') return 'BEiT-3';
+  if (model === 'siglip2') return 'SigLIP-2';
+  return 'MetaCLIP-2';
+}
+
 function syncEmbeddingModelControls() {
-  const isBeit3 = state.embeddingModel === 'beit3';
+  const model = state.embeddingModel;
+  const isBeit3 = model === 'beit3';
+  const isSiglip2 = model === 'siglip2';
   if (els.embeddingModelToggle) {
-    els.embeddingModelToggle.dataset.model = state.embeddingModel;
-    els.embeddingModelToggle.textContent = isBeit3 ? 'BEiT-3' : 'MetaCLIP-2';
-    els.embeddingModelToggle.title = isBeit3
-      ? 'Đang dùng BEiT-3. Bấm để đổi sang MetaCLIP-2.'
-      : 'Đang dùng MetaCLIP-2. Bấm để đổi sang BEiT-3.';
-    els.embeddingModelToggle.setAttribute('aria-label', `Mô hình embedding ${isBeit3 ? 'BEiT-3' : 'MetaCLIP-2'}`);
+    els.embeddingModelToggle.dataset.model = model;
+    els.embeddingModelToggle.textContent = getEmbeddingModelLabel(model);
+    els.embeddingModelToggle.title = `Đang dùng ${getEmbeddingModelLabel(model)}. Bấm để đổi sang mô hình khác (Alt+M).`;
+    els.embeddingModelToggle.setAttribute('aria-label', `Mô hình embedding ${getEmbeddingModelLabel(model)}`);
     els.embeddingModelToggle.classList.toggle('is-beit3', isBeit3);
+    els.embeddingModelToggle.classList.toggle('is-siglip2', isSiglip2);
   }
 }
 
@@ -1172,8 +1233,14 @@ async function refreshHealth() {
       state.embeddingModel = 'metaclip';
     }
     const ocrModels = health.ocr_models || {};
-    if (state.ocrModel !== 'ppocr' && ocrModels[state.ocrModel]?.available !== true) {
-      state.ocrModel = 'ppocr';
+    if (state.ocrModel && ocrModels[state.ocrModel]?.available !== true) {
+      if (ocrModels['union']?.available) {
+        state.ocrModel = 'union';
+      } else if (ocrModels['ppocr']?.available) {
+        state.ocrModel = 'ppocr';
+      } else if (ocrModels['monkey']?.available) {
+        state.ocrModel = 'monkey';
+      }
     }
     const defaults = health.default_fusion_weights;
     if (!state.fusionWeightsTouched && defaults && Number(defaults.metaclip) + Number(defaults.ocr) > 0) {
@@ -2682,6 +2749,8 @@ function setTaskType(taskType) {
   if (taskType === 'qa') {
     window.setTimeout(() => els.qaAnswer?.focus(), 60);
   }
+  const labelMap = { kis: 'KIS (Alt+1)', trake: 'TRAKE (Alt+2)', qa: 'Q&A (Alt+3)' };
+  setStatus(`Chế độ bài thi: ${labelMap[taskType] || taskType.toUpperCase()}`, 'ok');
 }
 
 function cycleTaskType() {
@@ -2722,15 +2791,11 @@ function renderTaskControls() {
 
 function renderDresSession() {
   const loggedIn = Boolean(state.dresSessionId);
-  const needsName = loggedIn && state.dresSelectedEvaluationId && !state.memberName;
+  const needsName = loggedIn && Boolean(state.dresSelectedEvaluationId) && !state.dresNameConfirmed;
   els.dresLoginView.hidden = loggedIn;
   els.dresSessionView.hidden = !loggedIn || needsName;
   els.memberNameView.hidden = !needsName;
   els.dresTitle.textContent = !loggedIn ? 'DRES Login' : needsName ? 'Tên gọi của bạn' : 'DRES Active Session';
-  const sessionNameEl = document.getElementById('sessionMemberNameDisplay');
-  if (sessionNameEl) {
-    sessionNameEl.textContent = state.memberName || state.dresUsername || 'Chưa đặt';
-  }
   els.dresOpenBtn.hidden = true; // Xóa nút đỏ duplicate; danh tính user đã nằm ở memberNameBtn
   renderResults();
 }
@@ -2738,8 +2803,12 @@ function renderDresSession() {
 function openDresModal() {
   els.dresModal.hidden = false;
   renderDresSession();
-  const focusTarget = !state.dresSessionId ? els.dresUsername : state.dresSelectedEvaluationId && !state.memberName ? els.memberName : els.evaluationSelect;
-  window.setTimeout(() => focusTarget.focus(), 0);
+  const focusTarget = !state.dresSessionId
+    ? els.dresUsername
+    : (state.dresSelectedEvaluationId && !state.dresNameConfirmed)
+      ? els.memberName
+      : els.evaluationSelect;
+  window.setTimeout(() => focusTarget?.focus(), 0);
 }
 
 function closeDresModal() {
@@ -2789,10 +2858,14 @@ function chooseEvaluation() {
     return;
   }
   state.dresSelectedEvaluationId = evaluationId;
+  state.dresNameConfirmed = false;
   saveDresCache();
   renderDresSession();
-  setDresStatus(`Đã chọn evaluation: ${els.evaluationSelect.options[els.evaluationSelect.selectedIndex].textContent}`);
-  if (state.memberName) closeDresModal();
+  setDresStatus('');
+  if (els.memberName) {
+    els.memberName.value = state.memberName || '';
+    window.setTimeout(() => els.memberName.focus(), 0);
+  }
 }
 
 async function saveMemberName() {
@@ -2802,6 +2875,7 @@ async function saveMemberName() {
     return;
   }
   state.memberName = name;
+  state.dresNameConfirmed = true;
   saveMemberCache();
   try {
     const resp = await fetch('/team/member', {
@@ -2813,7 +2887,7 @@ async function saveMemberName() {
     if (!resp.ok) throw new Error(teamState.detail || 'Lưu tên gọi thất bại.');
     applyTeamState(teamState);
     renderDresSession();
-    setDresStatus(`Đã lưu tên gọi: ${name}`);
+    setDresStatus('');
     closeDresModal();
   } catch (error) {
     showError(error.message || String(error));
@@ -2822,9 +2896,11 @@ async function saveMemberName() {
 
 function backToEvaluation() {
   state.dresSelectedEvaluationId = '';
+  state.dresNameConfirmed = false;
   saveMemberCache();
   saveDresCache();
   renderDresSession();
+  setDresStatus('');
 }
 
 async function loginDres() {
@@ -2861,8 +2937,9 @@ async function loginDres() {
     state.dresUsername = loginPayload.username || username;
     state.dresServerUrl = serverUrl;
     state.dresSelectedEvaluationId = '';
+    state.dresNameConfirmed = false;
     els.dresPassword.value = '';
-    setDresStatus(`Đã đăng nhập: ${loginPayload.username || username}`);
+    setDresStatus('');
 
     const evalResp = await fetch('/dres/evaluations', {
       method: 'POST',
@@ -2875,12 +2952,12 @@ async function loginDres() {
     renderEvaluations();
     renderDresSession();
     saveDresCache();
-    const activeCount = state.dresEvaluations.filter(item => item.status === 'ACTIVE').length;
-    setDresStatus(`Đã tải ${state.dresEvaluations.length} evaluation, ${activeCount} đang ACTIVE. Chọn evaluation để tiếp tục.`);
+    setDresStatus('');
   } catch (error) {
     state.dresSessionId = null;
     state.dresEvaluations = [];
     state.dresSelectedEvaluationId = '';
+    state.dresNameConfirmed = false;
     saveDresCache();
     renderEvaluations();
     renderDresSession();
@@ -2909,6 +2986,7 @@ async function logoutDres() {
   state.dresSessionId = null;
   state.dresEvaluations = [];
   state.dresSelectedEvaluationId = '';
+  state.dresNameConfirmed = false;
   state.dresUsername = '';
   state.memberName = '';
   els.dresUsername.value = '';
@@ -3637,7 +3715,7 @@ async function performSearch(requestedTemporalStageIndex = null, translatedQuery
       state.temporalSessionId = payload.session_id;
       state.temporalStage = Number(payload.stage || 0);
       if (state.stages[temporalStageIndex]) {
-        state.stages[temporalStageIndex].temporalExpanded = false;
+        state.stages[temporalStageIndex].temporalExpanded = true;
       }
       if (state.temporalStage < 3 && state.stages.length === state.temporalStage) {
         const nextIndex = state.temporalStage;
@@ -3649,7 +3727,8 @@ async function performSearch(requestedTemporalStageIndex = null, translatedQuery
           ocrQuery: '',
           asrQuery: '',
           ocrWeight: 0,
-          asrWeight: 0
+          asrWeight: 0,
+          temporalExpanded: true
         });
       }
     }
@@ -3799,7 +3878,7 @@ async function resetTemporalSearch() {
     state.temporalSessionId = null;
     state.temporalStage = 0;
     state.stages = state.stages.slice(0, 1);
-    state.stages[0].temporalExpanded = false;
+    state.stages[0].temporalExpanded = true;
     invalidateTemporalResults();
     renderStages();
     syncSearchModeControls();
@@ -3832,7 +3911,9 @@ if (els.themeToggleBtn) {
 els.embeddingModelToggle.addEventListener('click', async () => {
   if (els.embeddingModelToggle.disabled) return;
   const previousSessionId = state.temporalSessionId;
-  state.embeddingModel = state.embeddingModel === 'metaclip' ? 'beit3' : 'metaclip';
+  const models = ['metaclip', 'beit3', 'siglip2'];
+  const currentIndex = models.indexOf(state.embeddingModel);
+  state.embeddingModel = models[(currentIndex + 1) % models.length];
   if (state.searchMode === 'temporal' && previousSessionId) {
     try {
       await fetch('/temporal-search', {
@@ -3848,10 +3929,11 @@ els.embeddingModelToggle.addEventListener('click', async () => {
     invalidateTemporalResults();
     renderStages();
     syncSearchModeControls();
-    setLog(`Đã đổi sang ${state.embeddingModel === 'beit3' ? 'BEiT-3' : 'MetaCLIP-2'}; hãy tìm lại từ Query A.`);
+    setLog(`Đã đổi sang ${getEmbeddingModelLabel(state.embeddingModel)}; hãy tìm lại từ Query A.`);
     setStatus(state.backend ? 'Đã kết nối' : 'Sẵn sàng.', state.backend ? 'ok' : 'neutral');
   }
   syncEmbeddingModelControls();
+  setStatus(`Mô hình: ${getEmbeddingModelLabel(state.embeddingModel)} (Alt+M)`, 'ok');
 });
 if (els.ocrModelToggle) {
   els.ocrModelToggle.addEventListener('click', () => {
@@ -3983,6 +4065,25 @@ document.querySelector('[data-close-timing]').addEventListener('click', closeTim
 if (els.shortcutsBtn) els.shortcutsBtn.addEventListener('click', openShortcutsModal);
 if (els.closeShortcutsBtn) els.closeShortcutsBtn.addEventListener('click', closeShortcutsModal);
 document.querySelector('[data-close-shortcuts]')?.addEventListener('click', closeShortcutsModal);
+if (els.quickNoteBtn) els.quickNoteBtn.addEventListener('click', toggleQuickNoteModal);
+if (els.closeQuickNoteBtn) els.closeQuickNoteBtn.addEventListener('click', closeQuickNoteModal);
+if (els.quickNoteModal) {
+  els.quickNoteModal.querySelector('[data-close-note]')?.addEventListener('click', closeQuickNoteModal);
+}
+if (els.quickNoteTextarea) {
+  els.quickNoteTextarea.value = localStorage.getItem(NOTE_STORAGE_KEY) || '';
+  els.quickNoteTextarea.addEventListener('input', () => {
+    localStorage.setItem(NOTE_STORAGE_KEY, els.quickNoteTextarea.value);
+  });
+}
+if (els.clearQuickNoteBtn) {
+  els.clearQuickNoteBtn.addEventListener('click', () => {
+    if (confirm('Bạn có chắc muốn xóa toàn bộ ghi chú không?')) {
+      localStorage.removeItem(NOTE_STORAGE_KEY);
+      if (els.quickNoteTextarea) els.quickNoteTextarea.value = '';
+    }
+  });
+}
 els.dresOpenBtn.addEventListener('click', openDresModal);
 els.closeDresBtn.addEventListener('click', closeDresModal);
 document.querySelector('[data-close-dres]').addEventListener('click', closeDresModal);
@@ -4073,6 +4174,22 @@ document.addEventListener('keydown', event => {
   const inInput = event.target.matches('input, textarea');
   const key = event.key.toLowerCase();
 
+  // Tab key toggles Quick Note (works globally when not in another input, and inside note to close)
+  if (event.key === 'Tab' && !event.altKey && !event.ctrlKey && !event.metaKey) {
+    if (els.quickNoteModal && !els.quickNoteModal.hidden) {
+      event.preventDefault();
+      event.stopPropagation();
+      closeQuickNoteModal();
+      return;
+    }
+    if (!inInput) {
+      event.preventDefault();
+      event.stopPropagation();
+      openQuickNoteModal();
+      return;
+    }
+  }
+
   // Shift + K / T / Q (when not actively typing text inside an input or textarea)
   if (!inInput && event.shiftKey && !event.ctrlKey && !event.altKey && !event.metaKey) {
     if (key === 'k') {
@@ -4107,6 +4224,11 @@ document.addEventListener('keydown', event => {
     if (key === '3' || key === 'q') {
       event.preventDefault();
       setTaskType('qa');
+      return;
+    }
+    if (key === 'm') {
+      event.preventDefault();
+      els.embeddingModelToggle?.click();
       return;
     }
   }
@@ -4189,6 +4311,12 @@ document.addEventListener('keydown', event => {
     return;
   }
   if (event.key !== 'Escape') return;
+  if (els.quickNoteModal && !els.quickNoteModal.hidden) {
+    event.preventDefault();
+    event.stopPropagation();
+    closeQuickNoteModal();
+    return;
+  }
   if (els.shortcutsModal && !els.shortcutsModal.hidden) {
     event.preventDefault();
     event.stopPropagation();
@@ -4271,7 +4399,12 @@ els.qaAnswer.addEventListener('input', () => {
     }, 600);
   }
 });
-els.memberNameBtn?.addEventListener('click', openDresModal);
+els.memberNameBtn?.addEventListener('click', () => {
+  if (state.dresSessionId && state.dresSelectedEvaluationId) {
+    state.dresNameConfirmed = false;
+  }
+  openDresModal();
+});
 els.statsOpenBtn?.addEventListener('click', openStatsModal);
 els.closeStatsBtn?.addEventListener('click', closeStatsModal);
 document.querySelector('[data-close-stats]')?.addEventListener('click', closeStatsModal);

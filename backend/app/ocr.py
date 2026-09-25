@@ -209,6 +209,226 @@ class OcrTextIndex:
         }
 
 
+class UnionOcrIndex:
+    """
+    Union OCR index combining multiple OCR engines (e.g. MonkeyOCR and PP-OCR/PaddleOCR).
+    - Merges search hits across all underlying indexes.
+    - Boosts hits detected by multiple engines (multi-engine consensus).
+    - Combines frame-level OCR text and confidences.
+    - Fully implements the OcrTextIndex interface.
+    """
+
+    def __init__(self, indexes: list[OcrTextIndex], *, name: str = "union"):
+        self.indexes = [idx for idx in indexes if idx is not None]
+        self.name = name
+        self.cache_mode = "memory" if any(getattr(idx, "cache_mode", "") == "memory" for idx in self.indexes) else "disk"
+
+    @property
+    def num_records(self) -> int:
+        return max((idx.num_records for idx in self.indexes), default=0)
+
+    @property
+    def num_text_records(self) -> int:
+        return max((idx.num_text_records for idx in self.indexes), default=0)
+
+    @property
+    def source_num_records(self) -> int:
+        return max((idx.source_num_records for idx in self.indexes), default=0)
+
+    @property
+    def coverage_ratio(self) -> float:
+        return max((idx.coverage_ratio for idx in self.indexes), default=0.0)
+
+    @property
+    def is_partial(self) -> bool:
+        return any(idx.is_partial for idx in self.indexes)
+
+    @property
+    def ocr_model(self) -> str:
+        models = [idx.ocr_model for idx in self.indexes]
+        return f"union ({'+'.join(models)})" if models else "union"
+
+    @property
+    def metadata(self) -> dict[str, Any]:
+        return {
+            "ocr_model": self.ocr_model,
+            "sub_models": [idx.ocr_model for idx in self.indexes],
+            "num_records": self.num_records,
+            "num_text_records": self.num_text_records,
+            "source_num_records": self.source_num_records,
+            "coverage_ratio": self.coverage_ratio,
+            "is_partial": self.is_partial,
+            "cache_mode": self.cache_mode,
+        }
+
+    def search(
+        self,
+        query: str,
+        *,
+        limit: int | None,
+        video_id: str | None = None,
+        candidate_row_ids: Iterable[int] | None = None,
+    ) -> list[OcrHit]:
+        if limit is not None and int(limit) <= 0:
+            return []
+        if not self.indexes:
+            return []
+
+        c_ids = list(candidate_row_ids) if candidate_row_ids is not None else None
+        sub_limit = None if limit is None else max(int(limit) * 2, 500)
+
+        all_hits: list[list[OcrHit]] = []
+        for idx in self.indexes:
+            try:
+                hits = idx.search(
+                    query,
+                    limit=sub_limit,
+                    video_id=video_id,
+                    candidate_row_ids=c_ids,
+                )
+                all_hits.append(hits)
+            except ValueError:
+                continue
+
+        if not all_hits:
+            return []
+
+        merged: dict[str, dict[str, Any]] = {}
+        for hits in all_hits:
+            for hit in hits:
+                kid = hit.keyframe_id
+                if kid not in merged:
+                    merged[kid] = {
+                        "base_hit": hit,
+                        "engines_count": 1,
+                        "max_score": hit.ocr_score,
+                        "scores": [hit.ocr_score],
+                        "texts": [hit.ocr_text] if hit.ocr_text else [],
+                        "avg_confidences": [hit.avg_confidence],
+                        "max_confidences": [hit.max_confidence],
+                        "line_counts": [hit.line_count],
+                    }
+                else:
+                    entry = merged[kid]
+                    entry["engines_count"] += 1
+                    entry["max_score"] = max(entry["max_score"], hit.ocr_score)
+                    entry["scores"].append(hit.ocr_score)
+                    if hit.ocr_text and hit.ocr_text not in entry["texts"]:
+                        entry["texts"].append(hit.ocr_text)
+                    entry["avg_confidences"].append(hit.avg_confidence)
+                    entry["max_confidences"].append(hit.max_confidence)
+                    entry["line_counts"].append(hit.line_count)
+
+        final_hits: list[OcrHit] = []
+        for kid, entry in merged.items():
+            base: OcrHit = entry["base_hit"]
+            # Consensus boost: if confirmed by multiple engines, boost by 15%
+            if entry["engines_count"] > 1:
+                combined_score = entry["max_score"] * 1.15
+            else:
+                combined_score = entry["max_score"]
+
+            texts = entry["texts"]
+            if len(texts) == 0:
+                combined_text = base.ocr_text
+            elif len(texts) == 1:
+                combined_text = texts[0]
+            else:
+                t1, t2 = texts[0], texts[1]
+                if fold_ocr_text(t1) == fold_ocr_text(t2):
+                    combined_text = t1
+                elif t1 in t2:
+                    combined_text = t2
+                elif t2 in t1:
+                    combined_text = t1
+                else:
+                    combined_text = " | ".join(texts)
+
+            avg_conf = max(entry["avg_confidences"]) if entry["avg_confidences"] else base.avg_confidence
+            max_conf = max(entry["max_confidences"]) if entry["max_confidences"] else base.max_confidence
+            line_cnt = max(entry["line_counts"]) if entry["line_counts"] else base.line_count
+
+            final_hits.append(
+                OcrHit(
+                    row_id=base.row_id,
+                    keyframe_id=base.keyframe_id,
+                    video_id=base.video_id,
+                    shot_id=base.shot_id,
+                    timestamp_ms=base.timestamp_ms,
+                    image_file=base.image_file,
+                    ocr_text=combined_text,
+                    avg_confidence=avg_conf,
+                    max_confidence=max_conf,
+                    line_count=line_cnt,
+                    ocr_score=combined_score,
+                    ocr_rank=0,
+                )
+            )
+
+        final_hits.sort(key=lambda h: (-h.ocr_score, h.row_id))
+        if limit is not None:
+            final_hits = final_hits[:limit]
+
+        return [
+            OcrHit(
+                row_id=h.row_id,
+                keyframe_id=h.keyframe_id,
+                video_id=h.video_id,
+                shot_id=h.shot_id,
+                timestamp_ms=h.timestamp_ms,
+                image_file=h.image_file,
+                ocr_text=h.ocr_text,
+                avg_confidence=h.avg_confidence,
+                max_confidence=h.max_confidence,
+                line_count=h.line_count,
+                ocr_score=h.ocr_score,
+                ocr_rank=rank,
+            )
+            for rank, h in enumerate(final_hits, start=1)
+        ]
+
+    def get_frame_ocr(self, row_id: int | None = None, keyframe_id: str | None = None) -> dict[str, Any] | None:
+        if row_id is None and not keyframe_id:
+            return None
+        sub_results = [
+            idx.get_frame_ocr(row_id=row_id, keyframe_id=keyframe_id)
+            for idx in self.indexes
+        ]
+        valid_results = [r for r in sub_results if r is not None and (r.get("ocr_text") or r.get("line_count", 0) > 0)]
+        if not valid_results:
+            non_none = [r for r in sub_results if r is not None]
+            return non_none[0] if non_none else None
+
+        texts: list[str] = []
+        for r in valid_results:
+            t = str(r.get("ocr_text", "")).strip()
+            if t and t not in texts:
+                texts.append(t)
+
+        if not texts:
+            combined_text = ""
+        elif len(texts) == 1:
+            combined_text = texts[0]
+        else:
+            t1, t2 = texts[0], texts[1]
+            if fold_ocr_text(t1) == fold_ocr_text(t2):
+                combined_text = t1
+            elif t1 in t2:
+                combined_text = t2
+            elif t2 in t1:
+                combined_text = t1
+            else:
+                combined_text = " | ".join(texts)
+
+        return {
+            "ocr_text": combined_text,
+            "avg_confidence": max((float(r.get("avg_confidence", 0.0)) for r in valid_results), default=0.0),
+            "max_confidence": max((float(r.get("max_confidence", 0.0)) for r in valid_results), default=0.0),
+            "line_count": max((int(r.get("line_count", 0)) for r in valid_results), default=0),
+        }
+
+
+
 def fuse_ranked_results(
     visual_results: list[dict[str, Any]],
     ocr_hits: list[OcrHit],

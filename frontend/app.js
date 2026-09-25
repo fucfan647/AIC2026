@@ -1,13 +1,14 @@
 const state = {
   searchMode: 'temporal',
   embeddingModel: 'metaclip',
-  ocrModel: 'monkey',
+  ocrModel: 'union',
   queryMode: 'text',
   similarityItem: null,
   similarityQuery: '',
   similarityTextWeight: 30,
   asrWeight: 20,
   asrOnly: false,
+  autoTranslate: typeof localStorage !== 'undefined' ? localStorage.getItem('aic_auto_translate') === 'true' : false,
   stages: [{id: 1, name: 'Hành động A', query: '', translatedQuery: '', ocrQuery: '', asrQuery: '', ocrWeight: 41, asrWeight: 20}],
   temporalSessionId: null,
   temporalStage: 0,
@@ -17,6 +18,7 @@ const state = {
   dresSessionId: null,
   dresEvaluations: [],
   dresSelectedEvaluationId: '',
+  dresNameConfirmed: false,
   dresUsername: '',
   dresServerUrl: 'http://192.168.28.151:5000',
   submissionMode: 'dres',
@@ -44,6 +46,7 @@ const state = {
   activeFrameContextFrames: [],
   frameOverviewFrames: [],
   imageItem: null,
+  hoveredCardItem: null,
   shotContextCache: new Map(),
   submissionFeedback: new Map(),
   handledSubmissionEvents: new Set(),
@@ -97,6 +100,11 @@ const els = {
   activeQueryContent: document.getElementById('activeQueryContent'),
   videoActiveQueryContent: document.getElementById('videoActiveQueryContent'),
   globalSimilarityBtn: document.getElementById('globalSimilarityBtn'),
+  quickNoteBtn: document.getElementById('quickNoteBtn'),
+  quickNoteModal: document.getElementById('quickNoteModal'),
+  quickNoteTextarea: document.getElementById('quickNoteTextarea'),
+  closeQuickNoteBtn: document.getElementById('closeQuickNoteBtn'),
+  clearQuickNoteBtn: document.getElementById('clearQuickNoteBtn'),
   globalSimilarityPopover: document.getElementById('globalSimilarityPopover'),
   globalSimilarityDropzone: document.getElementById('globalSimilarityDropzone'),
   globalSimilarityQuery: document.getElementById('globalSimilarityQuery'),
@@ -114,6 +122,8 @@ const els = {
   resultCount: document.getElementById('resultCount'),
   searchMeta: document.getElementById('searchMeta'),
   embeddingModelToggle: document.getElementById('embeddingModelToggle'),
+  autoTranslateToggle: document.getElementById('autoTranslateToggle'),
+  autoTranslateLabel: document.getElementById('autoTranslateLabel'),
 
   searchTimingBtn: document.getElementById('searchTimingBtn'),
   selectedFrames: document.getElementById('selectedFrames'),
@@ -227,10 +237,44 @@ function stageLetter(index) {
   return String.fromCharCode(65 + index);
 }
 
-function setStatus(text, mode = 'neutral') {
+function formatLogSummary(text, mode) {
+  const t = String(text || '').toLowerCase().trim();
+  if (t === 'correct' || t.includes('correct')) return 'Correct';
+  if (t === 'wrong' || t.includes('wrong')) return 'Wrong';
+  if (t.includes('đang submit') || t.includes('request') || t.includes('nộp')) return 'Request';
+  if (t.includes('đang tìm') || t.includes('searching') || t.includes('đang dịch')) return 'Searching';
+  if (t.includes('loading') || t.includes('đang tải') || t.includes('đang kết nối')) return 'Loading';
+  if (t.includes('response') || t.includes('đã submit') || t.includes('đã ghi csv')) return 'Response';
+  if (t.includes('lỗi') || t.includes('error') || mode === 'error') return 'Error';
+  if (t.includes('done') || t.includes('hoàn tất')) return 'Done';
+  if (t.includes('đã kết nối') || t.includes('sẵn sàng') || t.includes('ready')) return 'Ready';
+  if (mode === 'ok') return 'Done';
+  if (mode === 'searching') return 'Searching';
+  return text.length <= 10 ? text : 'Ready';
+}
+
+function setStatus(text, mode = 'neutral', explicitSummary = null) {
   els.status.textContent = text;
-  els.connectionStatus.textContent = mode === 'searching' ? 'Đang tìm' : text;
-  els.connectionStatus.className = `status-pill ${mode === 'ok' ? 'ok' : mode === 'error' ? 'error' : 'warning'}`;
+  const statusMode = mode === 'searching' ? 'searching' : (mode === 'ok' ? 'ok' : (mode === 'error' ? 'error' : 'warning'));
+  const summary = explicitSummary || formatLogSummary(text, statusMode);
+  state.lastStatusSummary = summary;
+  state.lastStatusMode = statusMode;
+
+  if (els.connectionStatus) {
+    els.connectionStatus.className = `ghost compact log-btn status-pill ${statusMode}`;
+    els.connectionStatus.title = `Trạng thái: ${summary} (${text}) - Bấm để xem log chi tiết`;
+    const labelEl = els.connectionStatus.querySelector('.log-status-text');
+    if (labelEl) {
+      labelEl.textContent = summary;
+    } else {
+      els.connectionStatus.innerHTML = `<svg class="top-btn-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg><span class="status-dot" aria-hidden="true"></span><span id="logStatusText" class="log-status-text">${escapeHtml(summary)}</span>`;
+    }
+  }
+  const timestamp = new Date().toLocaleTimeString('vi-VN');
+  const logLine = `[${timestamp}] [${summary.toUpperCase()}] ${text}`;
+  if (!state.logs) state.logs = [];
+  state.logs.push(logLine);
+  if (state.logs.length > 100) state.logs.shift();
 }
 
 function showError(message) {
@@ -296,23 +340,27 @@ function renderActiveQuery() {
 }
 
 function renderSubmissionMode() {
-  const isCsv = state.submissionMode === 'csv';
-  els.submissionModeToggle.dataset.mode = state.submissionMode;
-  els.submissionModeToggle.setAttribute('aria-label', `Chế độ nộp bài hiện tại ${isCsv ? 'CSV' : 'DRES'}`);
+  state.submissionMode = 'dres';
+  if (els.submissionModeToggle) {
+    els.submissionModeToggle.dataset.mode = 'dres';
+    els.submissionModeToggle.setAttribute('aria-label', 'Cài đặt DRES');
+    els.submissionModeToggle.title = 'Đăng nhập và chọn evaluation DRES';
+  }
   els.dresOpenBtn.hidden = true;
-  els.queryStrip.hidden = !isCsv;
-  els.taskType.disabled = isCsv && Boolean(activeQuery());
+  els.queryStrip.hidden = true;
+  els.taskType.disabled = false;
   updateMemberNameDisplay();
-  if (els.trakeSubmitBtn) els.trakeSubmitBtn.title = isCsv ? 'Ghi TRAKE vào CSV' : 'Nộp TRAKE lên DRES';
+  if (els.trakeSubmitBtn) els.trakeSubmitBtn.title = 'Nộp TRAKE lên DRES';
   renderQueryStrip();
   renderActiveQuery();
   renderTaskControls();
 }
 
 function toggleSubmissionMode() {
-  state.submissionMode = state.submissionMode === 'dres' ? 'csv' : 'dres';
-  localStorage.setItem(SUBMISSION_MODE_CACHE_KEY, state.submissionMode);
+  state.submissionMode = 'dres';
+  localStorage.setItem(SUBMISSION_MODE_CACHE_KEY, 'dres');
   renderSubmissionMode();
+  openDresModal();
 }
 
 function currentDisplayName() {
@@ -417,7 +465,6 @@ async function loadSubmissionQueries() {
     renderQueryStrip();
     renderActiveQuery();
     if (state.memberName) syncUserProfile({ restore_active_query: !savedQuery });
-    if (els.errorBanner.textContent.startsWith('Không tải được danh sách query:')) showError('');
   } catch (error) {
     showError(`Không tải được danh sách query: ${error.message || error}`);
   }
@@ -597,7 +644,33 @@ async function clearCorrectSubmissionFeedback() {
 }
 
 function openLogModal() {
-  els.logContent.textContent = state.lastLog || 'Chưa có log.';
+  const currentSummary = state.lastStatusSummary || 'Ready';
+  const currentMode = state.lastStatusMode || 'ok';
+  
+  let content = `=== TRẠNG THÁI HIỆN TẠI: ${currentSummary.toUpperCase()} ===\n`;
+  content += `Thời gian: ${new Date().toLocaleString('vi-VN')}\n\n`;
+  
+  if (state.lastLog && state.lastLog !== 'Chưa có log.') {
+    content += `=== CHI TIẾT GẦN NHẤT (LATEST DETAIL / PAYLOAD / RESPONSE) ===\n`;
+    content += `${state.lastLog}\n\n`;
+  }
+  
+  if (state.logs && state.logs.length > 0) {
+    content += `=== LỊCH SỬ SỰ KIỆN GẦN ĐÂY (EVENT TIMELINE) ===\n`;
+    content += state.logs.slice(-40).reverse().join('\n');
+  } else {
+    content += 'Chưa có lịch sử sự kiện nào.';
+  }
+  
+  if (els.logContent) {
+    els.logContent.textContent = content;
+  }
+  
+  const titleEl = document.getElementById('logTitle');
+  if (titleEl) {
+    titleEl.innerHTML = `📋 Chi tiết Log <span class="badge ${currentMode}" style="margin-left: 8px; font-size: 11px; padding: 2px 7px; text-transform: uppercase;">${escapeHtml(currentSummary)}</span>`;
+  }
+  
   els.logModal.hidden = false;
 }
 
@@ -625,7 +698,6 @@ const TIMING_ROWS = [
   ['ocr_search_ms', 'Tìm kiếm văn bản OCR', 'Tìm các frame có nội dung chữ khớp với truy vấn trong chỉ mục OCR.'],
   ['asr_search_ms', 'Tìm kiếm lời nói ASR', 'Tìm các đoạn transcript khớp với truy vấn và ánh xạ về shot đại diện.'],
   ['fusion_ms', 'Ghép điểm các nguồn', 'Kết hợp thứ hạng hình ảnh, OCR và ASR theo các trọng số đã chọn.'],
-  ['result_scoring_ms', 'Chuẩn bị điểm kết quả', 'Gắn điểm cosine có sẵn vào kết quả mà không đọc lại embedding.'],
   ['anchor_search_ms', 'Tìm hành động anchor', 'Truy hồi toàn cục cho hành động nằm giữa chuỗi.'],
   ['local_stage_search_ms', 'Chấm các vùng lân cận', 'Chấm những shot trước và sau anchor có thể tạo thành chuỗi hợp lệ.'],
   ['stage_search_ms', 'Tổng tìm kiếm temporal', 'Tổng thời gian tìm anchor và chấm các vùng shot lân cận.'],
@@ -834,11 +906,43 @@ function closeStatsModal() {
 }
 
 function openShortcutsModal() {
-  if (els.shortcutsModal) els.shortcutsModal.hidden = false;
+  if (els.shortcutsModal) {
+    if (typeof syncAutoTranslateControls === 'function') syncAutoTranslateControls();
+    els.shortcutsModal.hidden = false;
+  }
 }
 
 function closeShortcutsModal() {
   if (els.shortcutsModal) els.shortcutsModal.hidden = true;
+}
+
+const NOTE_STORAGE_KEY = 'aic_user_quick_note';
+
+function openQuickNoteModal() {
+  if (!els.quickNoteModal) return;
+  els.quickNoteModal.hidden = false;
+  els.quickNoteBtn?.classList.add('is-active');
+  els.quickNoteBtn?.setAttribute('aria-expanded', 'true');
+  if (els.quickNoteTextarea) {
+    els.quickNoteTextarea.value = localStorage.getItem(NOTE_STORAGE_KEY) || '';
+    setTimeout(() => els.quickNoteTextarea.focus(), 30);
+  }
+}
+
+function closeQuickNoteModal() {
+  if (!els.quickNoteModal) return;
+  els.quickNoteModal.hidden = true;
+  els.quickNoteBtn?.classList.remove('is-active');
+  els.quickNoteBtn?.setAttribute('aria-expanded', 'false');
+}
+
+function toggleQuickNoteModal() {
+  if (!els.quickNoteModal) return;
+  if (els.quickNoteModal.hidden) {
+    openQuickNoteModal();
+  } else {
+    closeQuickNoteModal();
+  }
 }
 
 function normalizeOcrPercent(value, fallback = 41) {
@@ -871,20 +975,27 @@ function renderStages() {
     const stageOcrPercent = normalizeOcrPercent(stage.ocrWeight, 41);
     const stageAsrPercent = normalizeAsrPercent(stage.asrWeight, 20);
     const card = document.createElement('section');
-    card.className = 'stage-card';
+    card.className = 'stage-card' + (state.stages.length > 1 ? ' has-remove-btn' : '');
     card.dataset.stageId = stage.id;
     card.innerHTML = `
-      <div class="stage-head${isCompletedTemporalStage ? ' is-collapsible' : ''}" ${isCompletedTemporalStage ? `role="button" tabindex="0" aria-expanded="${stage.temporalExpanded === true}" title="Bấm để ${stage.temporalExpanded === true ? 'thu gọn' : 'chỉnh sửa'} Query ${stageLetter(index)}"` : ''}>
-        <div>${isCompletedTemporalStage ? '<span class="badge">Đã tìm</span>' : ''}</div>
-        ${state.stages.length > 1 ? `<button class="stage-remove" type="button" title="Xóa Query ${stageLetter(index)}" aria-label="Xóa Query ${stageLetter(index)}">${trashIcon()}</button>` : ''}
-      </div>
-      <div class="stage-fields" ${isCompletedTemporalStage && stage.temporalExpanded !== true ? 'hidden' : ''}>
-        <label class="text-query-field">
-          <span class="query-field-heading"><b class="query-field-icon" aria-hidden="true">${stageLetter(index)}</b>Text Query</span>
+      <div class="stage-fields" ${isCompletedTemporalStage && stage.temporalExpanded === false ? 'hidden' : ''}>
+        <div class="text-query-field">
+          <div class="query-field-header">
+            <div style="display: flex; align-items: center; gap: 6px;">
+              ${isCompletedTemporalStage ? '<span class="badge" style="padding: 2px 6px; font-size: 11px; line-height: 1;">Đã tìm</span>' : ''}
+              <span class="query-field-heading"><b class="query-field-icon" aria-hidden="true">${stageLetter(index)}</b>Text Query</span>
+            </div>
+            <div style="display: flex; align-items: center; gap: 4px;">
+              <button class="auto-translate-switch${state.autoTranslate ? ' is-active' : ''}" type="button" role="switch" aria-checked="${state.autoTranslate ? 'true' : 'false'}" title="${state.autoTranslate ? 'Auto Dịch tiếng Anh đang BẬT (Phím tắt: Alt+T). Bấm để tắt.' : 'Auto Dịch tiếng Anh đang TẮT (Phím tắt: Alt+T). Bấm để bật.'}">
+                <span class="translate-logo-icon" aria-hidden="true">${translateLogoSvg()}</span>
+                <span class="toggle-track"><span class="toggle-thumb"></span></span>
+              </button>
+              ${state.stages.length > 1 ? `<button class="stage-remove" type="button" title="Xóa Query ${stageLetter(index)}" aria-label="Xóa Query ${stageLetter(index)}">${trashIcon()}</button>` : ''}
+            </div>
+          </div>
           <textarea class="text-query" placeholder="Mô tả hành động ${stageLetter(index)}..."></textarea>
-          <button class="translate-query-btn" type="button" data-translate-query title="Dịch Text Query sang tiếng Anh bằng HPLT">Dịch sang English</button>
           <div class="translated-query-row" ${stage.translatedQuery ? '' : 'hidden'}><strong>English:</strong> <span class="translated-query-text"></span></div>
-        </label>
+        </div>
 
         <label class="ocr-query-field">
           <span class="query-field-heading"><b class="query-field-icon" aria-hidden="true">${ocrQueryIcon()}</b>OCR Query</span>
@@ -899,8 +1010,6 @@ function renderStages() {
         </label>
         <output class="stage-asr-weight-value" hidden>${stageAsrPercent}%</output>
         <input class="stage-asr-weight" type="range" min="0" max="100" value="${stageAsrPercent}" step="1" aria-label="Độ chú trọng ASR Query ${stageNumber}" />
-
-        <small class="fusion-weight-summary"></small>
 
         ${isCompletedTemporalStage ? `<button class="translate-query-btn" type="button" data-temporal-search-stage="${index}">Tìm lại Query ${stageLetter(index)}</button>` : ''}
       </div>`;
@@ -919,6 +1028,7 @@ function renderStages() {
         if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
           event.preventDefault();
           event.stopPropagation();
+          state.queryMode = 'text';
           performSearch(state.searchMode === 'temporal' ? index : null);
         }
       });
@@ -926,15 +1036,11 @@ function renderStages() {
 
     const translatedText = card.querySelector('.translated-query-text');
     if (translatedText) translatedText.textContent = stage.translatedQuery || '';
-    card.querySelector('[data-translate-query]')?.addEventListener('click', event => {
-      event.preventDefault();
-      translateQueryInput(event.currentTarget, stage);
-    });
 
     if (isCompletedTemporalStage) {
       const stageHead = card.querySelector('.stage-head');
       const toggleCompletedStage = () => {
-        stage.temporalExpanded = stage.temporalExpanded !== true;
+        stage.temporalExpanded = stage.temporalExpanded === false;
         renderStages();
       };
       stageHead?.addEventListener('click', toggleCompletedStage);
@@ -1054,6 +1160,11 @@ function renderStages() {
 
     updateStageFusionSummary();
     card.querySelector('.stage-remove')?.addEventListener('click', () => removeStage(stage.id));
+    card.querySelector('.auto-translate-switch')?.addEventListener('click', event => {
+      event.preventDefault();
+      event.stopPropagation();
+      toggleAutoTranslate();
+    });
     card.querySelector('[data-temporal-search-stage]')?.addEventListener('click', () => performSearch(index));
 
     els.stageList.appendChild(card);
@@ -1073,18 +1184,30 @@ function setSimilarityItem(item) {
     showError('Frame nguồn similarity không hợp lệ.');
     return;
   }
-  state.searchMode = 'single';
-  state.stages = state.stages.slice(0, 1);
   state.queryMode = 'similarity';
   state.similarityItem = item;
-  syncSearchModeControls();
-  renderStages();
   const imageUrl = item.thumbnail_url || `/thumbnail/${encodeURIComponent(item.keyframe_id)}`;
   if (els.globalSimilarityDropzone) {
     els.globalSimilarityDropzone.style.padding = '4px';
     els.globalSimilarityDropzone.innerHTML = `<img src="${escapeHtml(imageUrl)}" alt="${escapeHtml(item.video_id)}" style="width: 100%; height: auto; display: block; border-radius: 4px;" title="Đã chọn: ${escapeHtml(item.video_id)} - Frame ${escapeHtml(frameId(item))}" />`;
   }
   showError('');
+}
+
+function addFrameToImageQuery(item) {
+  if (!item?.keyframe_id || !item?.video_id) {
+    showError('Frame không hợp lệ.');
+    return;
+  }
+  setSimilarityItem(item);
+  if (els.globalSimilarityPopover && els.globalSimilarityPopover.hidden) {
+    els.globalSimilarityPopover.hidden = false;
+    if (els.globalSimilarityBtn) {
+      els.globalSimilarityBtn.setAttribute('aria-expanded', 'true');
+      els.globalSimilarityBtn.classList.add('is-active');
+    }
+  }
+  setStatus(`Đã thêm ${item.video_id} (#${frameId(item)}) vào Image Query`, 'ok');
 }
 
 function invalidateTemporalResults() {
@@ -1126,7 +1249,8 @@ function addTemporalStage() {
     asrWeight: normalizeAsrPercent(
       state.stages[state.stages.length - 1]?.asrWeight,
       20
-    )
+    ),
+    temporalExpanded: true
   });
 
   // Render UI ngay lập tức để người dùng thấy Tab B được thêm vào
@@ -1196,33 +1320,6 @@ function showStageTranslation(stage, translation) {
   if (translatedRow) translatedRow.hidden = false;
 }
 
-async function translateQueryInput(button, stage) {
-  const field = button.closest('.text-query-field');
-  const textarea = field?.querySelector('.text-query');
-  const source = textarea?.value.trim() || '';
-  if (!textarea || !source) {
-    showError('Nhập Text Query trước khi dịch.');
-    textarea?.focus();
-    return;
-  }
-
-  button.disabled = true;
-  const originalLabel = button.textContent;
-  button.textContent = 'Đang dịch…';
-  showError('');
-  try {
-    const {translation, latencyMs} = await requestEnglishTranslation(source);
-    showStageTranslation(stage, translation);
-    setStatus(`Đã dịch bằng HPLT (${latencyMs.toFixed(0)} ms)`, 'ok');
-  } catch (error) {
-    showError(`Dịch query thất bại: ${error.message || error}`);
-    setStatus('Dịch thất bại', 'error');
-  } finally {
-    button.disabled = false;
-    button.textContent = originalLabel;
-  }
-}
-
 function collectOcrQueries() {
   return state.stages.map(stage => String(stage.ocrQuery || '').trim());
 }
@@ -1245,16 +1342,67 @@ function syncSearchModeControls() {
 
 }
 
+function getEmbeddingModelLabel(model) {
+  if (model === 'beit3') return 'BEiT-3';
+  if (model === 'siglip2') return 'SigLIP-2';
+  return 'MetaCLIP-2';
+}
+
 function syncEmbeddingModelControls() {
-  const isBeit3 = state.embeddingModel === 'beit3';
+  const model = state.embeddingModel;
+  const isBeit3 = model === 'beit3';
+  const isSiglip2 = model === 'siglip2';
   if (els.embeddingModelToggle) {
-    els.embeddingModelToggle.dataset.model = state.embeddingModel;
-    els.embeddingModelToggle.textContent = isBeit3 ? 'BEiT-3' : 'MetaCLIP-2';
-    els.embeddingModelToggle.title = isBeit3
-      ? 'Đang dùng BEiT-3. Bấm để đổi sang MetaCLIP-2.'
-      : 'Đang dùng MetaCLIP-2. Bấm để đổi sang BEiT-3.';
-    els.embeddingModelToggle.setAttribute('aria-label', `Mô hình embedding ${isBeit3 ? 'BEiT-3' : 'MetaCLIP-2'}`);
+    els.embeddingModelToggle.dataset.model = model;
+    els.embeddingModelToggle.textContent = getEmbeddingModelLabel(model);
+    els.embeddingModelToggle.title = `Đang dùng ${getEmbeddingModelLabel(model)}. Bấm để đổi sang mô hình khác.`;
+    els.embeddingModelToggle.setAttribute('aria-label', `Mô hình embedding ${getEmbeddingModelLabel(model)}`);
     els.embeddingModelToggle.classList.toggle('is-beit3', isBeit3);
+    els.embeddingModelToggle.classList.toggle('is-siglip2', isSiglip2);
+  }
+  syncAutoTranslateControls();
+}
+
+function toggleAutoTranslate() {
+  state.autoTranslate = !state.autoTranslate;
+  try {
+    localStorage.setItem('aic_auto_translate', String(state.autoTranslate));
+  } catch (_) {}
+  if (!state.autoTranslate) {
+    state.stages.forEach(stage => {
+      stage.translatedQuery = '';
+    });
+    document.querySelectorAll('.translated-query-row').forEach(row => {
+      row.hidden = true;
+    });
+  }
+  syncAutoTranslateControls();
+  setStatus(
+    state.autoTranslate
+      ? 'Đã BẬT tự động dịch tiếng Anh (Alt+T).'
+      : 'Đã TẮT tự động dịch tiếng Anh (Alt+T).',
+    'ok'
+  );
+}
+
+function syncAutoTranslateControls() {
+  const enabled = Boolean(state.autoTranslate);
+  document.querySelectorAll('.auto-translate-switch').forEach(btn => {
+    btn.classList.toggle('is-active', enabled);
+    btn.setAttribute('aria-checked', enabled ? 'true' : 'false');
+    btn.title = enabled
+      ? 'Auto Dịch tiếng Anh đang BẬT (Phím tắt: Alt+T). Bấm để tắt.'
+      : 'Auto Dịch tiếng Anh đang TẮT (Phím tắt: Alt+T). Bấm để bật tự động dịch.';
+  });
+  if (els.autoTranslateToggle) {
+    els.autoTranslateToggle.classList.toggle('is-active', enabled);
+    els.autoTranslateToggle.setAttribute('aria-pressed', enabled ? 'true' : 'false');
+    els.autoTranslateToggle.title = enabled
+      ? 'Auto Dịch tiếng Anh đang BẬT (Phím tắt: Alt+T). Bấm để tắt.'
+      : 'Auto Dịch tiếng Anh đang TẮT (Phím tắt: Alt+T). Bấm để bật tự động dịch câu query tiếng Việt sang tiếng Anh trước khi tìm kiếm.';
+  }
+  if (els.autoTranslateLabel) {
+    els.autoTranslateLabel.textContent = enabled ? 'Auto EN: BẬT' : 'Auto EN: Tắt';
   }
 }
 
@@ -1267,8 +1415,14 @@ async function refreshHealth() {
       state.embeddingModel = 'metaclip';
     }
     const ocrModels = health.ocr_models || {};
-    if (state.ocrModel !== 'ppocr' && ocrModels[state.ocrModel]?.available !== true) {
-      state.ocrModel = 'ppocr';
+    if (state.ocrModel && ocrModels[state.ocrModel]?.available !== true) {
+      if (ocrModels['union']?.available) {
+        state.ocrModel = 'union';
+      } else if (ocrModels['ppocr']?.available) {
+        state.ocrModel = 'ppocr';
+      } else if (ocrModels['monkey']?.available) {
+        state.ocrModel = 'monkey';
+      }
     }
     const defaults = health.default_fusion_weights;
     if (!state.fusionWeightsTouched && defaults && Number(defaults.metaclip) + Number(defaults.ocr) > 0) {
@@ -1417,6 +1571,22 @@ function ocrQueryIcon() {
   return '<svg viewBox="0 0 24 24"><path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2M7 9h10M7 13h10M7 17h6"></path></svg>';
 }
 
+function translateLogoSvg() {
+  return `<svg class="translate-logo-svg" width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+  <defs>
+    <linearGradient id="transWarmGrad" x1="2" y1="2" x2="13" y2="13" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#B85860"/>
+      <stop offset="1" stop-color="#8F373E"/>
+    </linearGradient>
+  </defs>
+  <rect x="8.5" y="4" width="13" height="14.5" rx="2.5" fill="#FFF5F4" stroke="#ECD4D0" stroke-width="1.2"/>
+  <text x="15" y="14.8" font-size="8.5" font-family="'Noto Sans', 'Segoe UI', system-ui, sans-serif" font-weight="700" fill="#8F373E" text-anchor="middle">文</text>
+  <path d="M9.5 13.8L13.5 9.8V14.5C13.5 15.3 12.7 15.6 11.5 15L9.5 13.8Z" fill="#6B2228"/>
+  <path d="M3.5 3C2.67 3 2 3.67 2 4.5V12.3C2 13.13 2.67 13.8 3.5 13.8H9.5L13.5 9.8V4.5C13.5 3.67 12.83 3 12 3H3.5Z" fill="url(#transWarmGrad)"/>
+  <text x="7.2" y="10.4" font-size="8" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-weight="800" fill="#FFFFFF" text-anchor="middle">G</text>
+</svg>`;
+}
+
 function addToTrayIcon() {
   return '<i data-lucide="circle-plus" aria-hidden="true"></i>';
 }
@@ -1431,6 +1601,10 @@ function framesGalleryIcon() {
 
 function zoomIcon() {
   return '<i data-lucide="zoom-in" aria-hidden="true"></i>';
+}
+
+function imageQueryIcon() {
+  return '<i data-lucide="image" aria-hidden="true"></i>';
 }
 
 function submitIcon() {
@@ -1941,8 +2115,7 @@ function openResult(item) {
   let hasPlayed = false;
   state.activeVideoItem = item;
   state.isInitialVideoLoad = true;
-  setVideoFrameTextVisible(false);
-  els.modalTitle.textContent = `Video ${item.video_id} - cảnh ${item.shot_id}`;
+  els.modalTitle.textContent = item.video_id;
   els.videoModal.hidden = false;
   renderActiveQuery();
   els.player.pause();
@@ -1955,6 +2128,7 @@ function openResult(item) {
   renderTrakeTray();
   refreshIcons(els.videoModal);
   updateVideoControls();
+  setVideoFrameTextVisible(true);
   const playVideo = () => {
     state.isInitialVideoLoad = false;
     if (hasPlayed) return;
@@ -2330,6 +2504,7 @@ async function openVideoFrameGallery(item) {
           </div>
           <div class="shot-overview-actions">
             <button class="frame-hover-action" type="button" data-frame-action="add" title="Thêm vào khay" aria-label="Thêm frame ${escapeHtml(frame.frame_id ?? frame.keyframe_id)} vào khay">${addToTrayIcon()}</button>
+            <button class="frame-hover-action" type="button" data-frame-action="image-query" title="Thêm vào Image Query (Phím I)" aria-label="Thêm frame ${escapeHtml(frame.frame_id ?? frame.keyframe_id)} vào Image Query">${imageQueryIcon()}</button>
             <button class="frame-hover-action result-overlay-submit" type="button" data-frame-action="submit" title="Submit frame này" aria-label="Submit frame này">${submitIcon()}</button>
           </div>
           ${index === originIndex ? '<span class="current-frame-label origin-frame-label">Frame gốc</span>' : ''}
@@ -2339,9 +2514,15 @@ async function openVideoFrameGallery(item) {
     els.frameOverviewGrid.querySelectorAll('.video-frame-gallery-card').forEach(card => {
       const frame = state.frameOverviewFrames[Number(card.dataset.frameIndex)];
       card.addEventListener('click', () => openFrameImage(frame));
+      card.addEventListener('mouseenter', () => { state.hoveredCardItem = frame; });
+      card.addEventListener('mouseleave', () => { if (state.hoveredCardItem === frame) state.hoveredCardItem = null; });
       card.querySelector('[data-frame-action="add"]')?.addEventListener('click', async event => {
         event.stopPropagation();
         if (await addKeyframeToTray(frame)) event.currentTarget.classList.add('is-added');
+      });
+      card.querySelector('[data-frame-action="image-query"]')?.addEventListener('click', event => {
+        event.stopPropagation();
+        addFrameToImageQuery(frame);
       });
       card.querySelector('[data-frame-action="submit"]')?.addEventListener('click', async event => {
         event.stopPropagation();
@@ -2830,8 +3011,8 @@ function renderResults() {
           </button>`}
         <div class="result-overlay-actions">
           <button data-card-action="open" type="button" title="Mở video tại thời điểm này" aria-label="Mở video tại thời điểm này">${openVideoIcon()}</button>
-          <button data-card-action="frames" type="button" title="Xem frame của toàn bộ video" aria-label="Xem frame của toàn bộ video">${framesGalleryIcon()}</button>
           <button data-card-action="select" type="button" title="Thêm frame vào khay chọn" aria-label="Thêm frame vào khay chọn">${addToTrayIcon()}</button>
+          <button data-card-action="image-query" type="button" title="Thêm frame vào Image Query (Phím I)" aria-label="Thêm frame vào Image Query">${imageQueryIcon()}</button>
           ${canSubmit ? `<button class="result-overlay-submit" data-card-action="submit" type="button" title="Submit frame này" aria-label="Submit frame này">${submitIcon()}</button>` : ''}
         </div>
       </div>
@@ -2848,13 +3029,21 @@ function renderResults() {
     const openBtn = card.querySelector('[data-card-action="open"]');
     const framesBtn = card.querySelector('[data-card-action="frames"]');
     const selectBtn = card.querySelector('[data-card-action="select"]');
+    const imageQueryBtn = card.querySelector('[data-card-action="image-query"]');
     const submitBtn = card.querySelector('[data-card-action="submit"]');
+    card.addEventListener('mouseenter', () => { state.hoveredCardItem = item; });
+    card.addEventListener('mouseleave', () => { if (state.hoveredCardItem === item) state.hoveredCardItem = null; });
     card.addEventListener('dragstart', event => {
       event.dataTransfer.effectAllowed = 'copy';
       event.dataTransfer.setData('application/x-aic-keyframe', JSON.stringify(item));
       card.classList.add('is-dragging');
     });
     card.addEventListener('dragend', () => card.classList.remove('is-dragging'));
+    card.addEventListener('contextmenu', event => {
+      event.preventDefault();
+      event.stopPropagation();
+      openVideoFrameGallery(item);
+    });
     thumb.addEventListener('click', event => {
       event.stopPropagation();
       const fallbackIndex = state.searchMode === 'multi' ? centerFrameIndex : 0;
@@ -2865,14 +3054,22 @@ function renderResults() {
       event.stopPropagation();
       openResult(item);
     });
-    framesBtn.addEventListener('click', event => {
-      event.stopPropagation();
-      openVideoFrameGallery(item);
-    });
+    if (framesBtn) {
+      framesBtn.addEventListener('click', event => {
+        event.stopPropagation();
+        openVideoFrameGallery(item);
+      });
+    }
     selectBtn.addEventListener('click', event => {
       event.stopPropagation();
       selectResult(item);
     });
+    if (imageQueryBtn) {
+      imageQueryBtn.addEventListener('click', event => {
+        event.stopPropagation();
+        addFrameToImageQuery(item);
+      });
+    }
     if (submitBtn) {
       submitBtn.addEventListener('click', event => {
         event.stopPropagation();
@@ -3278,6 +3475,8 @@ function setTaskType(taskType) {
   if (taskType === 'qa') {
     window.setTimeout(() => els.qaAnswer?.focus(), 60);
   }
+  const labelMap = { kis: 'KIS (Alt+1)', trake: 'TRAKE (Alt+2)', qa: 'Q&A (Alt+3)' };
+  setStatus(`Chế độ bài thi: ${labelMap[taskType] || taskType.toUpperCase()}`, 'ok');
 }
 
 function cycleTaskType() {
@@ -3318,15 +3517,11 @@ function renderTaskControls() {
 
 function renderDresSession() {
   const loggedIn = Boolean(state.dresSessionId);
-  const needsName = loggedIn && state.dresSelectedEvaluationId && !state.memberName;
+  const needsName = loggedIn && Boolean(state.dresSelectedEvaluationId) && !state.dresNameConfirmed;
   els.dresLoginView.hidden = loggedIn;
   els.dresSessionView.hidden = !loggedIn || needsName;
   els.memberNameView.hidden = !needsName;
   els.dresTitle.textContent = !loggedIn ? 'DRES Login' : needsName ? 'Tên gọi của bạn' : 'DRES Active Session';
-  const sessionNameEl = document.getElementById('sessionMemberNameDisplay');
-  if (sessionNameEl) {
-    sessionNameEl.textContent = state.memberName || state.dresUsername || 'Chưa đặt';
-  }
   els.dresOpenBtn.hidden = true; // Xóa nút đỏ duplicate; danh tính user đã nằm ở memberNameBtn
   renderResults();
 }
@@ -3334,8 +3529,12 @@ function renderDresSession() {
 function openDresModal() {
   els.dresModal.hidden = false;
   renderDresSession();
-  const focusTarget = !state.dresSessionId ? els.dresUsername : state.dresSelectedEvaluationId && !state.memberName ? els.memberName : els.evaluationSelect;
-  window.setTimeout(() => focusTarget.focus(), 0);
+  const focusTarget = !state.dresSessionId
+    ? els.dresUsername
+    : (state.dresSelectedEvaluationId && !state.dresNameConfirmed)
+      ? els.memberName
+      : els.evaluationSelect;
+  window.setTimeout(() => focusTarget?.focus(), 0);
 }
 
 function closeDresModal() {
@@ -3385,10 +3584,14 @@ function chooseEvaluation() {
     return;
   }
   state.dresSelectedEvaluationId = evaluationId;
+  state.dresNameConfirmed = false;
   saveDresCache();
   renderDresSession();
-  setDresStatus(`Đã chọn evaluation: ${els.evaluationSelect.options[els.evaluationSelect.selectedIndex].textContent}`);
-  if (state.memberName) closeDresModal();
+  setDresStatus('');
+  if (els.memberName) {
+    els.memberName.value = state.memberName || '';
+    window.setTimeout(() => els.memberName.focus(), 0);
+  }
 }
 
 async function saveMemberName() {
@@ -3398,6 +3601,7 @@ async function saveMemberName() {
     return;
   }
   state.memberName = name;
+  state.dresNameConfirmed = true;
   saveMemberCache();
   try {
     const resp = await fetch('/team/member', {
@@ -3409,7 +3613,7 @@ async function saveMemberName() {
     if (!resp.ok) throw new Error(teamState.detail || 'Lưu tên gọi thất bại.');
     applyTeamState(teamState);
     renderDresSession();
-    setDresStatus(`Đã lưu tên gọi: ${name}`);
+    setDresStatus('');
     closeDresModal();
   } catch (error) {
     showError(error.message || String(error));
@@ -3418,9 +3622,11 @@ async function saveMemberName() {
 
 function backToEvaluation() {
   state.dresSelectedEvaluationId = '';
+  state.dresNameConfirmed = false;
   saveMemberCache();
   saveDresCache();
   renderDresSession();
+  setDresStatus('');
 }
 
 async function loginDres() {
@@ -3457,8 +3663,9 @@ async function loginDres() {
     state.dresUsername = loginPayload.username || username;
     state.dresServerUrl = serverUrl;
     state.dresSelectedEvaluationId = '';
+    state.dresNameConfirmed = false;
     els.dresPassword.value = '';
-    setDresStatus(`Đã đăng nhập: ${loginPayload.username || username}`);
+    setDresStatus('');
 
     const evalResp = await fetch('/dres/evaluations', {
       method: 'POST',
@@ -3471,12 +3678,12 @@ async function loginDres() {
     renderEvaluations();
     renderDresSession();
     saveDresCache();
-    const activeCount = state.dresEvaluations.filter(item => item.status === 'ACTIVE').length;
-    setDresStatus(`Đã tải ${state.dresEvaluations.length} evaluation, ${activeCount} đang ACTIVE. Chọn evaluation để tiếp tục.`);
+    setDresStatus('');
   } catch (error) {
     state.dresSessionId = null;
     state.dresEvaluations = [];
     state.dresSelectedEvaluationId = '';
+    state.dresNameConfirmed = false;
     saveDresCache();
     renderEvaluations();
     renderDresSession();
@@ -3505,6 +3712,7 @@ async function logoutDres() {
   state.dresSessionId = null;
   state.dresEvaluations = [];
   state.dresSelectedEvaluationId = '';
+  state.dresNameConfirmed = false;
   state.dresUsername = '';
   state.memberName = '';
   els.dresUsername.value = '';
@@ -4007,7 +4215,7 @@ async function submitPayloadToDres(submission, submittedItems = []) {
 
   showError('');
   unlockCorrectSound();
-  setStatus('Đang submit', 'searching');
+  setStatus('Đang gửi submission lên DRES...', 'searching', 'Request');
   setDresStatus('Đang submit DRES...');
   setLog(`[ĐANG GỬI SUBMISSION LÊN DRES]\n\nSERVER: ${serverUrl}\nEVALUATION ID: ${evaluationId}\nSESSION ID: ${state.dresSessionId}\n\nPAYLOAD GỬI ĐI (PAYLOAD):\n${JSON.stringify(submission, null, 2)}`);
 
@@ -4034,8 +4242,9 @@ async function submitPayloadToDres(submission, submittedItems = []) {
       publishSubmissionFeedback(feedback, submittedItems);
     }
     setStatus(
-      feedback === 'wrong' ? 'WRONG' : feedback === 'correct' ? 'CORRECT' : 'Đã submit',
-      feedback === 'wrong' ? 'error' : 'ok'
+      feedback === 'wrong' ? 'DRES trả về WRONG' : feedback === 'correct' ? 'DRES trả về CORRECT' : 'Nhận phản hồi từ DRES',
+      feedback === 'wrong' ? 'error' : 'ok',
+      feedback === 'wrong' ? 'Wrong' : feedback === 'correct' ? 'Correct' : 'Response'
     );
     setLog(`[SUBMIT THÀNH CÔNG]\n\nKẾT QUẢ: ${feedback ? feedback.toUpperCase() : 'ĐÃ GHI NHẬN'}\n\nPAYLOAD GỬI ĐI (PAYLOAD):\n${JSON.stringify(submission, null, 2)}\n\nPHẢN HỒI TỪ DRES (RESPONSE BODY):\n${text || 'Submit thành công.'}`);
     setDresStatus(feedback === 'wrong'
@@ -4048,7 +4257,7 @@ async function submitPayloadToDres(submission, submittedItems = []) {
       const reason = error.message || String(error);
       setLog(`[SUBMIT THẤT BẠI]\n\nLÝ DO (REASON):\n${reason}\n\nPAYLOAD GỬI ĐI (PAYLOAD):\n${JSON.stringify(submission, null, 2)}`);
     }
-    setStatus('Submit lỗi', 'error');
+    setStatus('Submit thất bại', 'error', 'Error');
     setDresStatus('Submit DRES thất bại. Bấm trạng thái góc phải để xem log.');
   }
 }
@@ -4106,7 +4315,8 @@ async function performSearch(requestedTemporalStageIndex = null, translatedQuery
     showError('Hãy sửa Query A, B hoặc C rồi bấm nút tìm lại của stage đó.');
     return;
   }
-  if (state.embeddingModel === 'beit3' && !translatedQueryOverride) {
+  const shouldAutoTranslate = Boolean(state.autoTranslate) && !translatedQueryOverride;
+  if (shouldAutoTranslate) {
     const indexesToTranslate = temporal
       ? [temporalStageIndex]
       : originalQueries.map((_, index) => index);
@@ -4116,19 +4326,18 @@ async function performSearch(requestedTemporalStageIndex = null, translatedQuery
         const stage = state.stages[index];
         if (!stage || !looksLikeVietnameseQuery(source) || stage.translatedQuery) continue;
         showError('');
-        setStatus(`Đang dịch Query ${stageLetter(index)} sang tiếng Anh cho BEiT-3…`, 'searching');
+        setStatus(`Đang dịch Query ${stageLetter(index)} sang tiếng Anh…`, 'searching');
         const {translation} = await requestEnglishTranslation(source);
         showStageTranslation(stage, translation);
       }
     } catch (error) {
-      showError(`BEiT-3 cần query tiếng Anh nhưng dịch tự động thất bại: ${error.message || error}`);
-      setStatus('Dịch tự động thất bại', 'error');
-      return;
+      console.warn('Auto translate warning, continuing with original query:', error);
+      setStatus('Không dịch được query, đang tiếp tục tìm kiếm…', 'searching');
     }
   }
-  const queries = originalQueries.map((query, index) => state.stages[index]?.translatedQuery || query);
+  const queries = originalQueries.map((query, index) => (state.autoTranslate ? (state.stages[index]?.translatedQuery || query) : query));
   const temporalOriginalQuery = temporal ? (originalQueries[temporalStageIndex] || '') : '';
-  const temporalQuery = temporal ? (translatedQueryOverride || state.stages[temporalStageIndex]?.translatedQuery || temporalOriginalQuery) : '';
+  const temporalQuery = temporal ? (translatedQueryOverride || (state.autoTranslate ? state.stages[temporalStageIndex]?.translatedQuery : '') || temporalOriginalQuery) : '';
   const temporalOcrQuery = temporal ? (ocrQueries[temporalStageIndex] || '') : '';
   const temporalAsrQuery = temporal ? (asrQueries[temporalStageIndex] || '') : '';
   const enteredQuery = translatedQueryOverride || queries[0] || '';
@@ -4136,19 +4345,16 @@ async function performSearch(requestedTemporalStageIndex = null, translatedQuery
   const ocrQuery = !temporal && !multi ? ocrQueries[0] : '';
   const asrQuery = !temporal && !multi ? asrQueries[0] : '';
   const asrOnly = !temporal && state.asrOnly && state.backend?.asr_available === true;
-  if (!temporal && !multi) {
-    if (ocrQuery || asrQuery || (query && !state.similarityItem)) state.queryMode = 'text';
-    if (!query && !ocrQuery && !asrQuery && state.similarityItem) state.queryMode = 'similarity';
-  }
-  const similarity = !asrOnly && state.searchMode === 'single'
+  const isSimilarityOpen = Boolean(els.globalSimilarityPopover && !els.globalSimilarityPopover.hidden);
+  const similarity = isSimilarityOpen && !asrOnly
     && Boolean(state.similarityItem)
     && ((!query && !ocrQuery && !asrQuery) || state.queryMode === 'similarity');
+  if (!similarity && !temporal && !multi) {
+    state.queryMode = 'text';
+  }
   const videoFilter = collectVideoFilter();
   const top_k = searchTopK();
-  // The backend performs per-result metadata and cosine work after vector
-  // retrieval. Asking for 3x more rows made a normal 200-result search process
-  // 600 rows and added significant latency on the remote embedding store.
-  const requestTopK = top_k;
+  const requestTopK = !temporal && !multi ? top_k * 3 : top_k;
   const invalidMultiQuery = multi && (
     queries.length < 2
     || queries.length > 5
@@ -4167,10 +4373,8 @@ async function performSearch(requestedTemporalStageIndex = null, translatedQuery
     return;
   }
   showError('');
-  setStatus('Đang tìm', 'searching');
-  // Remove result images immediately so the browser cancels thumbnail reads
-  // from the previous query instead of queueing /search behind those requests.
-  els.results.replaceChildren();
+  setStatus('Đang tìm kiếm...', 'searching', 'Searching');
+  setLog(`[SEARCH REQUEST] Bắt đầu tìm kiếm với Query: ${temporalQuery || state.similarityQuery || 'all'}\nMode: ${temporal ? 'Temporal' : (similarity ? 'Similarity' : 'Normal')}`);
   try {
     await clearCorrectSubmissionFeedback();
     const clientStarted = performance.now();
@@ -4291,7 +4495,7 @@ async function performSearch(requestedTemporalStageIndex = null, translatedQuery
       state.temporalSessionId = payload.session_id;
       state.temporalStage = Number(payload.stage || 0);
       if (state.stages[temporalStageIndex]) {
-        state.stages[temporalStageIndex].temporalExpanded = false;
+        state.stages[temporalStageIndex].temporalExpanded = true;
       }
       if (state.temporalStage < 3 && state.stages.length === state.temporalStage) {
         const nextIndex = state.temporalStage;
@@ -4303,7 +4507,8 @@ async function performSearch(requestedTemporalStageIndex = null, translatedQuery
           ocrQuery: '',
           asrQuery: '',
           ocrWeight: 0,
-          asrWeight: 0
+          asrWeight: 0,
+          temporalExpanded: true
         });
       }
     }
@@ -4378,23 +4583,25 @@ async function performSearch(requestedTemporalStageIndex = null, translatedQuery
     els.searchTimingBtn.textContent = `Tổng thời gian: ${formatMilliseconds(clientTotalMs)}`;
     els.searchTimingBtn.disabled = false;
     els.searchTimingBtn.hidden = false;
-    const modelLabel = (payload.embedding_model || state.embeddingModel) === 'beit3' ? 'BEiT-3' : 'MetaCLIP';
+    const modelLabel = getEmbeddingModelLabel(payload.embedding_model || state.embeddingModel);
     const weightMeta = similarity
       ? `Ảnh tương tự · nguồn ${state.similarityItem.keyframe_id}${state.similarityQuery.trim() ? ` · Ảnh ${100 - state.similarityTextWeight}% / mô tả ${state.similarityTextWeight}%` : ''}`
       : temporal
-      ? `Query ${stageLetter(Math.max(0, Number(payload.stage || 1) - 1))} · cửa sổ ${Number(payload.parameters?.temporal_window_ms || 300000) / 1000} giây · model cố định ${modelLabel}`
+      ? `Query ${stageLetter(Math.max(0, Number(payload.stage || 1) - 1))} · cửa sổ ${Number(payload.parameters?.temporal_window_ms || 45000) / 1000} giây · model cố định ${modelLabel}`
       : multi
       ? `${queries.length} Query${asrOnly ? ' · Chỉ ASR' : ''}`
       : `Hình ảnh ${Math.round(Number(requestBody.metaclip_weight) * 100)}% · Text OCR ${Math.round(Number(requestBody.ocr_weight) * 100)}% · ASR ${Math.round(Number(requestBody.asr_weight || 0) * 100)}%${ocrQuery ? ` · OCR “${ocrQuery}”` : ''}${asrQuery ? ` · ASR “${asrQuery}”` : ''}`;
     const temporalMeta = temporal ? `Temporal ${payload.stage_count || queries.length} hành động · ` : '';
     const anchorMeta = temporal && payload.anchor_stage ? `anchor H${payload.anchor_stage} · ` : '';
-    const ocrModelLabel = state.ocrModel === 'monkey' ? 'MonkeyOCRv2' : 'PP-OCRv6';
+    const ocrModelLabel = state.ocrModel === 'union' ? 'Union OCR' : (state.ocrModel === 'monkey' ? 'MonkeyOCRv2' : 'PP-OCRv6');
     els.searchMeta.textContent = `${modelLabel} · ${ocrModelLabel} · ${temporalMeta}${anchorMeta}${backendMethodLabel(payload.search_backend)} · ${weightMeta}${filterMeta}`;
     els.results.scrollTo({top: 0, left: 0, behavior: 'smooth'});
-    setStatus('Đã kết nối', 'ok');
+    setStatus('Tìm kiếm hoàn tất', 'ok', 'Done');
+    setLog(`[SEARCH DONE] Hoàn thành tìm kiếm trong ${Math.round(clientTotalMs)}ms (Server: ${Math.round(backendTotalMs)}ms).\nKết quả: ${payload.results?.length || 0} frames.\nModel: ${modelLabel}\nBackend: ${payload.search_backend || 'Faiss'}`);
   } catch (error) {
     showError(error.message || String(error));
-    setStatus('Mất kết nối', 'error');
+    setStatus(error.message || 'Lỗi tìm kiếm', 'error', 'Error');
+    setLog(`[SEARCH ERROR] Thất bại:\n` + (error.stack || error.message || String(error)));
   }
 }
 
@@ -4454,7 +4661,7 @@ async function resetTemporalSearch() {
     state.temporalSessionId = null;
     state.temporalStage = 0;
     state.stages = state.stages.slice(0, 1);
-    state.stages[0].temporalExpanded = false;
+    state.stages[0].temporalExpanded = true;
     invalidateTemporalResults();
     renderStages();
     syncSearchModeControls();
@@ -4487,7 +4694,10 @@ if (els.themeToggleBtn) {
 els.embeddingModelToggle.addEventListener('click', async () => {
   if (els.embeddingModelToggle.disabled) return;
   const previousSessionId = state.temporalSessionId;
-  state.embeddingModel = state.embeddingModel === 'metaclip' ? 'beit3' : 'metaclip';
+  const models = ['metaclip', 'beit3', 'siglip2'];
+  const currentIndex = models.indexOf(state.embeddingModel);
+  const nextModel = models[(currentIndex + 1) % models.length];
+  state.embeddingModel = nextModel;
   if (state.searchMode === 'temporal' && previousSessionId) {
     try {
       await fetch('/temporal-search', {
@@ -4503,11 +4713,18 @@ els.embeddingModelToggle.addEventListener('click', async () => {
     invalidateTemporalResults();
     renderStages();
     syncSearchModeControls();
-    setLog(`Đã đổi sang ${state.embeddingModel === 'beit3' ? 'BEiT-3' : 'MetaCLIP-2'}; hãy tìm lại từ Query A.`);
+    setLog(`Đã đổi sang ${getEmbeddingModelLabel(state.embeddingModel)}; hãy tìm lại từ Query A.`);
     setStatus(state.backend ? 'Đã kết nối' : 'Sẵn sàng.', state.backend ? 'ok' : 'neutral');
   }
   syncEmbeddingModelControls();
+  setStatus(`Mô hình: ${getEmbeddingModelLabel(state.embeddingModel)} (Alt+M)`, 'ok');
 });
+
+if (els.autoTranslateToggle) {
+  els.autoTranslateToggle.addEventListener('click', () => {
+    toggleAutoTranslate();
+  });
+}
 
 els.stageList.addEventListener('keydown', event => {
   if (event.target.matches('.text-query, .similarity-query, .stage-asr-query') && event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
@@ -4547,9 +4764,22 @@ els.taskType.addEventListener('change', renderTaskControls);
 // Global Similarity Dropzone Logic
 els.globalSimilarityBtn.addEventListener('click', () => {
   const isExpanded = els.globalSimilarityBtn.getAttribute('aria-expanded') === 'true';
-  els.globalSimilarityBtn.setAttribute('aria-expanded', !isExpanded);
-  els.globalSimilarityBtn.classList.toggle('is-active', !isExpanded);
-  els.globalSimilarityPopover.hidden = isExpanded;
+  const nextExpanded = !isExpanded;
+  els.globalSimilarityBtn.setAttribute('aria-expanded', String(nextExpanded));
+  els.globalSimilarityBtn.classList.toggle('is-active', nextExpanded);
+  els.globalSimilarityPopover.hidden = !nextExpanded;
+  if (!nextExpanded) {
+    state.similarityItem = null;
+    state.similarityQuery = '';
+    state.queryMode = 'text';
+    if (els.globalSimilarityDropzone) {
+      els.globalSimilarityDropzone.style.padding = '12px';
+      els.globalSimilarityDropzone.innerHTML = `<strong id="globalSimilarityDropzoneText" style="color: var(--text-primary); font-size: 13px;">Thả ảnh vào đây</strong>`;
+    }
+    if (els.globalSimilarityQuery) {
+      els.globalSimilarityQuery.value = '';
+    }
+  }
 });
 
 
@@ -4611,13 +4841,8 @@ els.selectionTray.addEventListener('drop', event => {
   }
 });
 
-els.submissionModeToggle.addEventListener('click', (e) => {
-  const target = e.target.closest('[data-mode]');
-  if (target && target.dataset.mode === 'dres' && state.submissionMode === 'dres') {
-    openDresModal();
-    return;
-  }
-  toggleSubmissionMode();
+els.submissionModeToggle.addEventListener('click', () => {
+  openDresModal();
 });
 els.qaAnswer.addEventListener('keydown', event => {
   if (event.key === 'Enter' && !event.isComposing) {
@@ -4626,6 +4851,13 @@ els.qaAnswer.addEventListener('keydown', event => {
   }
 });
 els.connectionStatus.addEventListener('click', openLogModal);
+document.getElementById('copyLogBtn')?.addEventListener('click', () => {
+  if (els.logContent) {
+    navigator.clipboard.writeText(els.logContent.textContent).then(() => {
+      alert('Đã sao chép log vào bộ nhớ tạm (clipboard)!');
+    }).catch(() => {});
+  }
+});
 els.closeLogBtn.addEventListener('click', closeLogModal);
 document.querySelector('[data-close-log]').addEventListener('click', closeLogModal);
 els.searchTimingBtn.addEventListener('click', openTimingModal);
@@ -4634,6 +4866,30 @@ document.querySelector('[data-close-timing]').addEventListener('click', closeTim
 if (els.shortcutsBtn) els.shortcutsBtn.addEventListener('click', openShortcutsModal);
 if (els.closeShortcutsBtn) els.closeShortcutsBtn.addEventListener('click', closeShortcutsModal);
 document.querySelector('[data-close-shortcuts]')?.addEventListener('click', closeShortcutsModal);
+if (els.quickNoteBtn) els.quickNoteBtn.addEventListener('click', toggleQuickNoteModal);
+if (els.closeQuickNoteBtn) els.closeQuickNoteBtn.addEventListener('click', closeQuickNoteModal);
+if (els.quickNoteModal) {
+  els.quickNoteModal.querySelector('[data-close-note]')?.addEventListener('click', closeQuickNoteModal);
+}
+if (els.quickNoteTextarea) {
+  els.quickNoteTextarea.value = localStorage.getItem(NOTE_STORAGE_KEY) || '';
+  els.quickNoteTextarea.addEventListener('input', () => {
+    localStorage.setItem(NOTE_STORAGE_KEY, els.quickNoteTextarea.value);
+  });
+}
+if (els.clearQuickNoteBtn) {
+  els.clearQuickNoteBtn.addEventListener('click', () => {
+    if (confirm('Bạn có chắc muốn xóa toàn bộ ghi chú không?')) {
+      localStorage.removeItem(NOTE_STORAGE_KEY);
+      if (els.quickNoteTextarea) els.quickNoteTextarea.value = '';
+    }
+  });
+}
+document.getElementById('modalAutoTranslateToggle')?.addEventListener('click', event => {
+  event.preventDefault();
+  event.stopPropagation();
+  toggleAutoTranslate();
+});
 els.dresOpenBtn.addEventListener('click', openDresModal);
 els.closeDresBtn.addEventListener('click', closeDresModal);
 document.querySelector('[data-close-dres]').addEventListener('click', closeDresModal);
@@ -4744,6 +5000,22 @@ document.addEventListener('keydown', event => {
   const inInput = event.target.matches('input, textarea');
   const key = event.key.toLowerCase();
 
+  // Tab key toggles Quick Note (works globally when not in another input, and inside note to close)
+  if (event.key === 'Tab' && !event.altKey && !event.ctrlKey && !event.metaKey) {
+    if (els.quickNoteModal && !els.quickNoteModal.hidden) {
+      event.preventDefault();
+      event.stopPropagation();
+      closeQuickNoteModal();
+      return;
+    }
+    if (!inInput) {
+      event.preventDefault();
+      event.stopPropagation();
+      openQuickNoteModal();
+      return;
+    }
+  }
+
   // Shift + K / T / Q (when not actively typing text inside an input or textarea)
   if (!inInput && event.shiftKey && !event.ctrlKey && !event.altKey && !event.metaKey) {
     if (key === 'k') {
@@ -4770,7 +5042,7 @@ document.addEventListener('keydown', event => {
       setTaskType('kis');
       return;
     }
-    if (key === '2' || key === 't') {
+    if (key === '2') {
       event.preventDefault();
       setTaskType('trake');
       return;
@@ -4778,6 +5050,35 @@ document.addEventListener('keydown', event => {
     if (key === '3' || key === 'q') {
       event.preventDefault();
       setTaskType('qa');
+      return;
+    }
+    if (key === 'm') {
+      event.preventDefault();
+      els.embeddingModelToggle?.click();
+      return;
+    }
+    if (key === 't' || key === 'e') {
+      event.preventDefault();
+      toggleAutoTranslate();
+      return;
+    }
+    if (key === 'a') {
+      event.preventDefault();
+      addTemporalStage();
+      setStatus('Đã thêm Stage (Alt+A)', 'ok');
+      return;
+    }
+    if (key === 'd') {
+      event.preventDefault();
+      if (state.stages.length > 1) {
+        removeStage(state.stages[state.stages.length - 1].id);
+        setStatus('Đã xóa Stage cuối (Alt+D)', 'ok');
+      }
+      return;
+    }
+    if (key === 'i') {
+      event.preventDefault();
+      els.globalSimilarityBtn?.click();
       return;
     }
   }
@@ -4817,23 +5118,30 @@ document.addEventListener('keydown', event => {
     cycleTaskType();
     return;
   }
-  
   if (key === 'i') {
-    event.preventDefault();
-    els.globalSimilarityBtn.click();
-    return;
-  }
-  if (key === 'a') {
-    event.preventDefault();
-    addTemporalStage();
-    return;
-  }
-  if (key === 'd') {
-    event.preventDefault();
-    if (state.stages.length > 1) {
-      removeStage(state.stages[state.stages.length - 1].id);
+    let target = null;
+    if (els.imageModal && !els.imageModal.hidden && state.imageItem) {
+      target = state.imageItem;
+    } else if (els.videoModal && !els.videoModal.hidden && state.activeVideoItem) {
+      target = getDisplayedVideoFrameItem() || state.activeVideoItem;
+    } else if (state.hoveredCardItem) {
+      target = state.hoveredCardItem;
+    } else {
+      const hoveredCard = document.querySelector('.card:hover, .video-frame-gallery-card:hover');
+      if (hoveredCard) {
+        const btn = hoveredCard.querySelector('[data-card-action="image-query"], [data-frame-action="image-query"]');
+        if (btn) {
+          event.preventDefault();
+          btn.click();
+          return;
+        }
+      }
     }
-    return;
+    if (target) {
+      event.preventDefault();
+      addFrameToImageQuery(target);
+      return;
+    }
   }
   if (event.key === '?' || (event.key === '/' && event.shiftKey)) {
     event.preventDefault();
@@ -4872,6 +5180,12 @@ document.addEventListener('keydown', event => {
     return;
   }
   if (event.key !== 'Escape') return;
+  if (els.quickNoteModal && !els.quickNoteModal.hidden) {
+    event.preventDefault();
+    event.stopPropagation();
+    closeQuickNoteModal();
+    return;
+  }
   if (els.shortcutsModal && !els.shortcutsModal.hidden) {
     event.preventDefault();
     event.stopPropagation();
@@ -4908,6 +5222,12 @@ document.addEventListener('keydown', event => {
     closeShotOverview();
     return;
   }
+  if (els.frameOverviewModal && !els.frameOverviewModal.hidden) {
+    event.preventDefault();
+    event.stopPropagation();
+    closeFrameOverview();
+    return;
+  }
   if (els.videoModal.hidden) return;
   event.preventDefault();
   event.stopPropagation();
@@ -4920,7 +5240,7 @@ syncEmbeddingModelControls();
 syncFusionWeights();
 renderResults();
 renderSelection();
-state.submissionMode = localStorage.getItem(SUBMISSION_MODE_CACHE_KEY) === 'csv' ? 'csv' : 'dres';
+state.submissionMode = 'dres';
 loadDresCache();
 loadMemberCache();
 renderEvaluations();
@@ -4955,7 +5275,12 @@ els.qaAnswer.addEventListener('input', () => {
     }, 600);
   }
 });
-els.memberNameBtn?.addEventListener('click', openDresModal);
+els.memberNameBtn?.addEventListener('click', () => {
+  if (state.dresSessionId && state.dresSelectedEvaluationId) {
+    state.dresNameConfirmed = false;
+  }
+  openDresModal();
+});
 els.statsOpenBtn?.addEventListener('click', openStatsModal);
 els.closeStatsBtn?.addEventListener('click', closeStatsModal);
 document.querySelector('[data-close-stats]')?.addEventListener('click', closeStatsModal);
@@ -5210,10 +5535,6 @@ async function clearMyTrakeFrames() {
 }
 
 async function removeTrakeUser(clientId, name, frameCount) {
-  const description = frameCount > 0
-    ? `Xóa user ${name} cùng ${frameCount} frame khỏi cả hai khay?`
-    : `Xóa user ${name} khỏi Team Hub?`;
-  if (!window.confirm(description)) return;
   try {
     const resp = await fetch('/team/trake/user/remove', {
       method: 'POST',
