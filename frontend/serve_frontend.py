@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import csv
+import hashlib
 try:
     import fcntl
 except ImportError:
@@ -26,6 +27,8 @@ import urllib.request
 import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+
+from PIL import Image, ImageOps
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
@@ -687,6 +690,7 @@ def create_app(
     threading.Thread(target=load_metadata_background, daemon=True).start()
     extended_metadata_cache: Dict[str, Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]] = {}
     extended_metadata_lock = threading.Lock()
+    extended_frame_lookup: Dict[str, Dict[str, Any]] = {}
 
     def load_extended_local_metadata(video_id: str) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
         """Load M/N/S frame metadata lazily from the extracted local resources."""
@@ -713,6 +717,7 @@ def create_app(
         metadata_file = video_dir / "metadata.json"
         if metadata_file.is_file():
             try:
+                image_names = {entry.name for entry in video_dir.iterdir()}
                 payload = json.loads(metadata_file.read_text(encoding="utf-8"))
                 entries = payload.get(local_video_id, payload)
                 if isinstance(entries, dict):
@@ -731,7 +736,7 @@ def create_app(
                             fps = float(info.get("fps", 25.0) or 25.0)
                             timestamp_ms = round(int(info.get("id", ordinal) or ordinal) * 1000.0 / fps)
                         image_file = f"{frame_stem}.webp"
-                        if not (video_dir / image_file).is_file():
+                        if image_file not in image_names:
                             continue
                         frames.append({
                             "keyframe_id": f"{keyframe_video_id}_{frame_stem}",
@@ -745,7 +750,10 @@ def create_app(
             except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
                 print(f"[frontend] Cannot parse local metadata {metadata_file}: {exc}", flush=True)
         else:
-            fps = 25.0
+            # Series S keyframes are sampled at 30 FPS. Its _SUCCESS file
+            # does not always include an fps field, so use that format
+            # default instead of the generic 25 FPS fallback.
+            fps = 30.0 if requested_id.startswith("S") else 25.0
             success_file = video_dir / "_SUCCESS"
             try:
                 success_data = json.loads(success_file.read_text(encoding="utf-8"))
@@ -784,7 +792,26 @@ def create_app(
             extended_metadata_cache[requested_id] = result
             extended_metadata_cache[local_video_id] = result
             extended_metadata_cache[keyframe_video_id] = result
+            for frame in frames:
+                extended_frame_lookup[frame["keyframe_id"].replace("_", "-")] = frame
         return result
+
+    def enrich_local_frame_timestamp(item: Dict[str, Any]) -> Dict[str, Any]:
+        """Replace stale DB timing with the timestamp from local keyframe metadata."""
+        video_id = str(item.get("video_id", "")).strip().upper()
+        if not re.fullmatch(r"[MNS]\d{2,3}[-_]V\d{3}", video_id):
+            return item
+        load_extended_local_metadata(video_id)
+        keyframe_id = str(item.get("keyframe_id", "")).strip()
+        match = extended_frame_lookup.get(keyframe_id.replace("_", "-"))
+        if match is None:
+            return item
+        corrected = dict(item)
+        corrected["timestamp_ms"] = int(match["timestamp_ms"])
+        corrected["timestamp_seconds"] = float(match["timestamp_seconds"])
+        corrected["frame_id"] = int(match["frame_id"])
+        corrected["shot_id"] = int(match["shot_id"])
+        return corrected
 
     team_socket_hub = TeamSocketHub()
     team_state_lock = asyncio.Lock()
@@ -1013,7 +1040,12 @@ def create_app(
 
             results = []
             n_frames_per_video: Dict[str, int] = {}
-            for item in payload.get("results", []):
+            # Disk metadata reads must not block thumbnail/HTTP service.
+            raw_results = payload.get("results", [])
+            enriched_results = await asyncio.to_thread(
+                lambda: [enrich_local_frame_timestamp(item) for item in raw_results]
+            )
+            for item in enriched_results:
                 if int(item.get("source_embedding_row", -1)) in deleted_rows:
                     continue
                 item_is_n = is_n_video(item)
@@ -1215,8 +1247,8 @@ def create_app(
             raise HTTPException(status_code=404, detail="Frame da duoc chuyen sang frames_deleted")
         if not metadata_ready.is_set():
             raise HTTPException(status_code=503, detail="Shot metadata is loading")
-        local_all_frames, local_shot_frames = load_extended_local_metadata(video_id)
-        available_shot_frames = shot_frames_by_video.get(video_id, []) or local_shot_frames
+        local_all_frames, local_shot_frames = await asyncio.to_thread(load_extended_local_metadata, video_id)
+        available_shot_frames = local_shot_frames or shot_frames_by_video.get(video_id, [])
         available_shot_ids = {int(frame.get("shot_id", -1)) for frame in available_shot_frames}
         if local_all_frames and shot_id not in available_shot_ids:
             matched_frame = next(
@@ -1249,8 +1281,8 @@ def create_app(
     async def frame_context(request: Request, video_id: str, timestamp_ms: int = 0, count: int = 0):
         if not metadata_ready.is_set():
             raise HTTPException(status_code=503, detail="Frame metadata is loading")
-        local_all_frames, _ = load_extended_local_metadata(video_id)
-        available_frames = frames_by_video.get(video_id, []) or local_all_frames
+        local_all_frames, _ = await asyncio.to_thread(load_extended_local_metadata, video_id)
+        available_frames = local_all_frames or frames_by_video.get(video_id, [])
         frames = select_frame_context(available_frames, timestamp_ms, count=count)
         if not frames:
             query = urllib.parse.urlencode({"timestamp_ms": timestamp_ms, "count": count})
@@ -1312,6 +1344,37 @@ def create_app(
 
     _local_keyframe_cache: Dict[str, Optional[Path]] = {}
     _missing_warning_count = 0
+    thumbnail_cache_dir = FRONTEND_DIR / "runtime" / "thumbnails_400_v1"
+    thumbnail_cache_dir.mkdir(parents=True, exist_ok=True)
+    thumbnail_locks = [threading.Lock() for _ in range(64)]
+    thumbnail_slots = asyncio.Semaphore(6)
+
+    def local_thumbnail_file(keyframe_id: str) -> Optional[Path]:
+        """Persist small previews; full-resolution keyframe endpoints stay intact."""
+        source = resolve_local_keyframe_file(keyframe_id)
+        if source is None:
+            return None
+        stat = source.stat()
+        identity = f"{source}|{stat.st_size}|{stat.st_mtime_ns}"
+        digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()
+        target = thumbnail_cache_dir / f"{digest}.jpg"
+        if target.is_file():
+            return target
+        with thumbnail_locks[int(digest[:8], 16) % len(thumbnail_locks)]:
+            if not target.is_file():
+                try:
+                    with Image.open(source) as original:
+                        original.draft("RGB", (400, 400))
+                        preview = ImageOps.exif_transpose(original)
+                        preview.thumbnail((400, 400), Image.Resampling.LANCZOS)
+                        preview = preview.convert("RGB")
+                        temporary = target.with_suffix(".tmp")
+                        preview.save(temporary, format="JPEG", quality=84)
+                        temporary.replace(target)
+                except (OSError, ValueError) as exc:
+                    print(f"[thumbnail] Preview failed for {source}: {exc}", flush=True)
+                    return source
+        return target
 
     def resolve_local_keyframe_file(keyframe_id: str) -> Optional[Path]:
         raw = urllib.parse.unquote(str(keyframe_id)).strip()
@@ -1437,13 +1500,14 @@ def create_app(
     async def thumbnail(keyframe_id: str, request: Request):
         if keyframe_id in deleted_keyframe_ids:
             raise HTTPException(status_code=404, detail="Frame da duoc chuyen sang frames_deleted")
-        local_file = resolve_local_keyframe_file(keyframe_id)
+        async with thumbnail_slots:
+            local_file = await asyncio.to_thread(local_thumbnail_file, keyframe_id)
         if local_file is not None:
             mime = mimetypes.guess_type(str(local_file))[0] or "image/jpeg"
             return FileResponse(
                 local_file,
                 media_type=mime,
-                headers={"Cache-Control": "public, max-age=31536000, immutable", "X-Keyframe-Source": "local"},
+                headers={"Cache-Control": "public, max-age=31536000, immutable", "X-Keyframe-Source": "local", "X-Thumbnail-Max-Size": "400"},
             )
         return await proxy_backend(request, f"/thumbnail/{urllib.parse.quote(keyframe_id)}")
 

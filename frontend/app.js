@@ -46,6 +46,9 @@ const state = {
   activeVideoItem: null,
   activeShotContextFrames: [],
   activeFrameContextFrames: [],
+  frameContextPending: false,
+  frameContextRequestId: 0,
+  frameContextLastCenterMs: null,
   frameOverviewFrames: [],
   imageItem: null,
   hoveredCardItem: null,
@@ -1695,7 +1698,7 @@ function zoomIcon() {
 }
 
 function imageQueryIcon() {
-  return '<i data-lucide="image" aria-hidden="true"></i>';
+  return '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/></svg>';
 }
 
 function submitIcon() {
@@ -1821,22 +1824,23 @@ function renderVideoFrameItems(items, activeItem) {
     btn.dataset.seconds = String(seconds);
     btn.dataset.keyframeId = String(item.keyframe_id || '');
     if (item.shot_id !== undefined) btn.dataset.shotId = String(item.shot_id ?? '');
-    if (item.frame_id !== undefined) btn.dataset.frameId = String(item.frame_id ?? '');
-    const titleText = item.frame_id !== undefined
-      ? `Frame ${item.frame_id} · ${formatVideoTime(seconds)}`
+    const displayFrameId = frameId(item);
+    if (displayFrameId !== '0') btn.dataset.frameId = displayFrameId;
+    const titleText = displayFrameId !== '0'
+      ? `Frame ${displayFrameId} · ${formatVideoTime(seconds)}`
       : `Shot ${item.shot_id} · ${formatVideoTime(seconds)}`;
-    const labelText = item.frame_id !== undefined
-      ? `F${item.frame_id} · ${formatVideoTime(seconds)}`
+    const labelText = displayFrameId !== '0'
+      ? `F${displayFrameId} · ${formatVideoTime(seconds)}`
       : formatVideoTime(seconds);
     btn.title = titleText;
-    const thumbnailUrl = item.thumbnail_url || item.image_url || `/thumbnail/${encodeURIComponent(item.keyframe_id)}`;
+    const thumbnailUrl = item.thumbnail_url || item.image_url || keyframeThumbnailUrl(item.keyframe_id);
     btn.innerHTML = `
       <span class="playhead-needle" aria-hidden="true"></span>
-      <img src="${escapeHtml(thumbnailUrl)}" alt="${item.video_id} ${item.frame_id !== undefined ? 'frame ' + item.frame_id : 'shot ' + item.shot_id}" loading="lazy" />
+      <img src="${escapeHtml(thumbnailUrl)}" alt="${item.video_id} ${displayFrameId !== '0' ? 'frame ' + displayFrameId : 'shot ' + item.shot_id}" loading="lazy" decoding="async" />
       <span>${labelText}</span>`;
     btn.addEventListener('click', () => {
       if (state.hasDraggedStrip) return;
-      seekVideoToSeconds(seconds, true);
+      seekVideoToSeconds(seconds, false);
       centerActiveFrameInStrip(true);
     });
     frag.appendChild(btn);
@@ -1872,6 +1876,9 @@ function renderVideoFrameStrip(activeItem) {
   if (!els.videoFrameStrip) return;
   renderVideoFrameItems(uniqueVideoFrames(activeItem.video_id, activeItem), activeItem);
   state.activeFrameContextFrames = [];
+  state.frameContextPending = false;
+  state.frameContextRequestId += 1;
+  state.frameContextLastCenterMs = null;
   state.activeShotContextFrames = [];
   if (els.expandShotContextBtn) els.expandShotContextBtn.disabled = true;
   if (els.expandFrameContextBtn) els.expandFrameContextBtn.disabled = false;
@@ -1902,51 +1909,73 @@ function renderVideoFrameStrip(activeItem) {
     });
   }
 
-  // Load all frames of the video into the bottom filmstrip!
-  const frameCacheKey = `${activeItem.video_id}:all_frames`;
-  let frameReq = state.shotContextCache.get(frameCacheKey);
-  if (!frameReq) {
-    const params = new URLSearchParams({
-      timestamp_ms: String(timestampMs),
-      count: '0'
-    });
-    const url = `/frame-context/${encodeURIComponent(activeItem.video_id)}?${params}`;
-    frameReq = fetch(url).then(async response => {
-      if (!response.ok) {
-        const error = new Error(`frame context HTTP ${response.status}`);
-        error.status = response.status;
-        throw error;
-      }
-      return response.json();
-    });
-    state.shotContextCache.set(frameCacheKey, frameReq);
-    frameReq.catch(() => state.shotContextCache.delete(frameCacheKey));
-  }
+  loadVideoFrameContextWindow(activeItem, timestampMs);
+}
 
-  frameReq.then(payload => {
+function loadVideoFrameContextWindow(activeItem, timestampMs) {
+  if (state.frameContextPending) return;
+  const requestId = ++state.frameContextRequestId;
+  state.frameContextPending = true;
+  state.frameContextLastCenterMs = timestampMs;
+  const params = new URLSearchParams({
+    timestamp_ms: String(Math.max(0, Math.round(timestampMs))),
+    count: '49'
+  });
+  const url = `/frame-context/${encodeURIComponent(activeItem.video_id)}?${params}`;
+  fetch(url).then(async response => {
+    if (!response.ok) {
+      const error = new Error(`frame context HTTP ${response.status}`);
+      error.status = response.status;
+      throw error;
+    }
+    return response.json();
+  }).then(payload => {
     const isStillActive = state.activeVideoItem
       && state.activeVideoItem.video_id === activeItem.video_id;
-    if (!isStillActive || !Array.isArray(payload.frames) || payload.frames.length === 0) return;
+    if (requestId !== state.frameContextRequestId || !isStillActive
+      || !Array.isArray(payload.frames) || payload.frames.length === 0) return;
     const mergedFrames = [...payload.frames];
-    if (activeItem?.keyframe_id && !mergedFrames.some(frame => frame.keyframe_id === activeItem.keyframe_id)) {
+    if (activeItem?.keyframe_id
+      && Math.abs(answerTimeMs(activeItem) - timestampMs) <= 1000
+      && !mergedFrames.some(frame => frame.keyframe_id === activeItem.keyframe_id)) {
       mergedFrames.push(activeItem);
+      mergedFrames.sort((a, b) => answerTimeMs(a) - answerTimeMs(b));
     }
     state.activeFrameContextFrames = mergedFrames;
     renderVideoFrameItems(mergedFrames, activeItem);
-
-    // Ensure active/candidate frame is centered in view
     centerActiveFrameInStrip(false);
     window.requestAnimationFrame(() => centerActiveFrameInStrip(false));
-    window.setTimeout(() => centerActiveFrameInStrip(false), 80);
-    window.setTimeout(() => centerActiveFrameInStrip(false), 200);
   }).catch(error => {
-    // If frame-context fails or 503, fallback to shot-context or retry
+    if (requestId !== state.frameContextRequestId) return;
     if (state.activeShotContextFrames && state.activeShotContextFrames.length > 0) {
       renderVideoFrameItems(state.activeShotContextFrames, activeItem);
     } else if (error.status === 503 && state.activeVideoItem?.keyframe_id === activeItem.keyframe_id) {
-      window.setTimeout(() => renderVideoFrameStrip(activeItem), 750);
+      window.setTimeout(() => loadVideoFrameContextWindow(activeItem, timestampMs), 750);
+    }
+  }).finally(() => {
+    if (requestId === state.frameContextRequestId) {
+      state.frameContextPending = false;
+      maybeLoadAdjacentVideoFrameContext();
     }
   });
+}
+
+function maybeLoadAdjacentVideoFrameContext() {
+  if (state.isInitialVideoLoad || state.frameContextPending || !state.activeVideoItem || !state.activeFrameContextFrames.length) return;
+  const frames = state.activeFrameContextFrames;
+  const firstMs = answerTimeMs(frames[0]);
+  const lastMs = answerTimeMs(frames[frames.length - 1]);
+  const currentMs = Math.max(0, (Number(els.player.currentTime) || 0) * 1000);
+  if (state.frameContextLastCenterMs !== null
+    && Math.abs(currentMs - state.frameContextLastCenterMs) < 500) return;
+  const duration = Number.isFinite(els.player.duration) ? els.player.duration * 1000 : 0;
+  const outsideWindow = currentMs < firstMs || currentMs > lastMs;
+  const nearForwardEdge = !els.player.paused
+    && currentMs >= lastMs - Math.min(1500, Math.max(250, (lastMs - firstMs) * 0.15))
+    && (!duration || currentMs < duration - 1500);
+  if (outsideWindow || nearForwardEdge) {
+    loadVideoFrameContextWindow(state.activeVideoItem, currentMs);
+  }
 }
 
 let lastAutoScrollTime = 0;
@@ -1955,14 +1984,9 @@ function updateVideoFrameStripActive(autoScroll = false) {
   if (!els.videoFrameStrip) return;
   const current = Number.isFinite(els.player.currentTime) ? els.player.currentTime : 0;
   const thumbs = [...els.videoFrameStrip.querySelectorAll('.video-frame-thumb')];
-  let active = thumbs[0] || null;
-  thumbs.forEach(btn => {
-    const seconds = Number(btn.dataset.seconds);
-    // Keep the latest extracted frame that has actually appeared in playback.
-    // Choosing the absolute nearest frame can switch OCR to a future frame early.
-    if (Number.isFinite(seconds) && seconds <= current + 0.001) active = btn;
-    btn.classList.remove('is-active');
-  });
+  const active = findActiveStripThumb(current);
+  maybeLoadAdjacentVideoFrameContext();
+  thumbs.forEach(btn => btn.classList.remove('is-active'));
   if (active) {
     active.classList.add('is-active');
     updateVideoFrameText(active);
@@ -2166,7 +2190,7 @@ function loadVideoSource(videoId, startSeconds = 0) {
 
     // Ban đầu chỉ tải đúng dải ~3 giây quanh frame mục tiêu (tiết kiệm tối đa băng thông SSH)
     activeHls = new window.Hls({
-      startPosition: Math.max(0, targetStart - 1.0),
+      startPosition: targetStart,
       maxBufferLength: 3,             // Chỉ buffer 3 giây phía trước
       maxMaxBufferLength: 5,          // Ngưỡng tối đa ban đầu 5 giây
       backBufferLength: 3,            // Chỉ giữ lại 3 giây phía sau
@@ -2203,7 +2227,6 @@ function loadVideoSource(videoId, startSeconds = 0) {
 
 function openResult(item) {
   const startSeconds = answerTimeMs(item) / 1000.0;
-  let hasPlayed = false;
   state.activeVideoItem = item;
   state.isInitialVideoLoad = true;
   els.modalTitle.textContent = item.video_id;
@@ -2212,7 +2235,7 @@ function openResult(item) {
   els.player.pause();
   els.player.poster = `/thumbnail/${item.keyframe_id}`;
   els.player.preload = 'metadata';
-  els.player.autoplay = true;
+  els.player.autoplay = false;
   setVideoRate(els.player.playbackRate || 1);
   renderTaskControls();
   renderVideoFrameStrip(item);
@@ -2220,34 +2243,30 @@ function openResult(item) {
   refreshIcons(els.videoModal);
   updateVideoControls();
   setVideoFrameTextVisible(true);
-  const playVideo = () => {
-    state.isInitialVideoLoad = false;
-    if (hasPlayed) return;
-    hasPlayed = true;
-    els.player.play().catch(() => {});
-  };
   els.player.addEventListener('loadedmetadata', function seekOnce() {
     els.player.removeEventListener('loadedmetadata', seekOnce);
     const target = Math.min(startSeconds, Number.isFinite(els.player.duration) ? Math.max(0, els.player.duration - 0.1) : startSeconds);
     if (target <= 0) {
-      playVideo();
+      state.isInitialVideoLoad = false;
+      updateVideoControls();
       return;
     }
     els.player.currentTime = target;
-    window.setTimeout(playVideo, 600);
   });
-  els.player.addEventListener('seeked', function playOnce() {
-    els.player.removeEventListener('seeked', playOnce);
+  els.player.addEventListener('seeked', function pauseOnce() {
+    els.player.removeEventListener('seeked', pauseOnce);
+    els.player.pause();
     state.isInitialVideoLoad = false;
     updateVideoControls();
     centerActiveFrameInStrip(false);
-    playVideo();
   });
   loadVideoSource(item.video_id, startSeconds);
 }
 
 function closeVideo() {
   state.isInitialVideoLoad = false;
+  state.frameContextRequestId += 1;
+  state.frameContextPending = false;
   setVideoFrameTextVisible(false);
   els.player.pause();
   closeVideoControlPopovers();
@@ -2985,6 +3004,32 @@ function closeFrameImage() {
   els.imageModal.hidden = true;
 }
 
+function findActiveStripThumb(seconds) {
+  if (!els.videoFrameStrip) return null;
+  const data = [...els.videoFrameStrip.querySelectorAll('.video-frame-thumb')]
+    .map((element, index) => ({element, seconds: Number(element.dataset.seconds), index}))
+    .filter(item => Number.isFinite(item.seconds));
+  if (data.length === 0) return null;
+  let low = 0;
+  let high = data.length - 1;
+  let best = 0;
+  while (low <= high) {
+    const mid = Math.floor((low + high) / 2);
+    if (data[mid].seconds <= seconds) {
+      best = mid;
+      low = mid + 1;
+    } else {
+      high = mid - 1;
+    }
+  }
+  const next = best + 1;
+  if (next < data.length
+    && Math.abs(data[next].seconds - seconds) < Math.abs(data[best].seconds - seconds)) {
+    best = next;
+  }
+  return data[best].element;
+}
+
 function openImageFrameInVideo() {
   const item = state.imageItem;
   if (!item?.video_id) return;
@@ -3073,10 +3118,25 @@ function renderTemporalResults() {
   els.resultCount.textContent = `${state.results.length} chuỗi`;
 }
 
+function keyframeThumbnailUrl(keyframeId) {
+  return `/thumbnail/${encodeURIComponent(keyframeId)}?v=local-thumb-400-v1`;
+}
+
+function loadAllResultImages() {
+  const images = els.results.querySelectorAll('img[data-src]');
+  images.forEach(image => {
+    image.decoding = 'async';
+    image.loading = 'eager';
+    image.src = image.dataset.src;
+    delete image.dataset.src;
+  });
+}
+
 function renderResults() {
   els.results.innerHTML = '';
   els.results.classList.remove('temporal-results');
   els.results.classList.toggle('multi-results', state.searchMode === 'multi');
+  const cards = document.createDocumentFragment();
   (state.searchMode === 'multi' ? sortResults(state.results) : state.results).forEach((item, index) => {
     const canSubmit = Boolean(
       (state.submissionMode === 'csv' && activeQuery())
@@ -3098,16 +3158,16 @@ function renderResults() {
       <div class="thumb-frame ${state.searchMode === 'multi' ? 'multi-frame-preview' : ''}">
         ${state.searchMode === 'multi' ? `
           <button class="result-frame multi-frame-main" type="button" data-result-frame="${centerFrameIndex}" title="${escapeHtml(centerFrame.query || '')} · Mở frame ${escapeHtml(centerFrame.shot_id)}">
-            <img src="/thumbnail/${encodeURIComponent(centerFrame.keyframe_id)}" alt="${escapeHtml(centerFrame.video_id)} cảnh ${escapeHtml(centerFrame.shot_id)}" loading="lazy" />
+            <img data-src="${keyframeThumbnailUrl(centerFrame.keyframe_id)}" alt="${escapeHtml(centerFrame.video_id)} cảnh ${escapeHtml(centerFrame.shot_id)}" />
           </button>
           <div class="multi-frame-secondary" style="--secondary-count: ${secondaryFrames.length}">
             ${secondaryFrames.map(({frame, frameIndex}) => `
               <button class="result-frame multi-frame-small" type="button" data-result-frame="${frameIndex}" title="${escapeHtml(frame.query || '')} · Mở frame ${escapeHtml(frame.shot_id)}">
-                <img src="/thumbnail/${encodeURIComponent(frame.keyframe_id)}" alt="${escapeHtml(frame.video_id)} cảnh ${escapeHtml(frame.shot_id)}" loading="lazy" />
+                <img data-src="${keyframeThumbnailUrl(frame.keyframe_id)}" alt="${escapeHtml(frame.video_id)} cảnh ${escapeHtml(frame.shot_id)}" />
               </button>`).join('')}
           </div>` : `
           <button class="result-frame" type="button" data-result-frame="0" title="Mở frame ${escapeHtml(item.shot_id)}">
-            <img src="/thumbnail/${encodeURIComponent(item.keyframe_id)}" alt="${escapeHtml(item.video_id)} cảnh ${escapeHtml(item.shot_id)}" loading="lazy" />
+            <img data-src="${keyframeThumbnailUrl(item.keyframe_id)}" alt="${escapeHtml(item.video_id)} cảnh ${escapeHtml(item.shot_id)}" />
           </button>`}
         <div class="result-overlay-actions">
           <button data-card-action="open" type="button" title="Mở video tại thời điểm này" aria-label="Mở video tại thời điểm này">${openVideoIcon()}</button>
@@ -3187,9 +3247,10 @@ function renderResults() {
         if (frame) openResult(frame);
       });
     });
-    refreshIcons(card);
-    els.results.appendChild(card);
+    cards.appendChild(card);
   });
+  els.results.appendChild(cards);
+  loadAllResultImages();
   els.resultCount.textContent = `${state.results.length} kết quả`;
 }
 
@@ -3404,6 +3465,12 @@ function answerTimeMs(item) {
 }
 
 function frameId(item) {
+  if (!item) return '0';
+  const fps = fpsForVideo(item.video_id);
+  const timestampMs = answerTimeMs(item);
+  if (Number.isFinite(fps) && fps > 0 && Number.isFinite(timestampMs)) {
+    return String(Math.max(0, Math.floor((timestampMs / 1000) * fps + 1e-6)));
+  }
   return String(item.frame_id ?? item.frame_idx ?? item.shot_id ?? answerTimeMs(item));
 }
 
@@ -3473,7 +3540,7 @@ function buildSubmitRequest(target = null, taskType = null) {
       throw new Error('Khay TRAKE đang trống; hãy thêm frame vào TRAKE trước khi nộp.');
     }
     const videoId = items[0].video_id;
-    const frameList = items.map(item => String(item.frame_id ?? frameId(item))).join(',');
+    const frameList = items.map(item => frameId(item)).join(',');
     return {
       task_type: 'trake',
       payload: {
@@ -3823,6 +3890,8 @@ async function logoutDres() {
   setDresStatus('Đã đăng xuất DRES.');
 }
 
+let lastTeamTraySignature = '';
+
 function applyTeamState(teamState) {
   if (teamState.team_note && typeof teamState.team_note === 'object') {
     applyTeamNote(teamState.team_note);
@@ -3839,7 +3908,6 @@ function applyTeamState(teamState) {
       state.myTrakeEvent = state.trakeUsers[state.clientId].event;
     }
   }
-  renderTrakeDrawer();
   // Active query is isolated locally per user
   const submissionCounts = teamState.submission_counts && typeof teamState.submission_counts === 'object'
     ? teamState.submission_counts
@@ -3860,12 +3928,21 @@ function applyTeamState(teamState) {
   const feedbackChanged = nextFeedback.size !== state.submissionFeedback.size
     || [...nextFeedback].some(([keyframeId, verdict]) => state.submissionFeedback.get(keyframeId) !== verdict);
   state.submissionFeedback = nextFeedback;
+  const traySignature = JSON.stringify([
+    state.teamVotes, state.trakeFrames, state.trakeUsers,
+    [...nextFeedback], state.memberName, state.submissionMode
+  ]);
+  const traysChanged = traySignature !== lastTeamTraySignature;
+  lastTeamTraySignature = traySignature;
   if (feedbackChanged) renderResults();
   renderQueryStrip();
   renderActiveQuery();
   renderSubmissionMode();
-  renderSelection();
-  renderTrakeTray();
+  if (traysChanged) {
+    renderTrakeDrawer();
+    renderSelection();
+    renderTrakeTray();
+  }
 }
 
 async function refreshTeamState() {
@@ -4224,7 +4301,7 @@ async function submitSharedTrakeToDres() {
     showError('TRAKE yêu cầu tất cả frame phải thuộc cùng một video.');
     return;
   }
-  const frameList = items.map(item => String(item.frame_id ?? frameId(item))).join(',');
+  const frameList = items.map(item => frameId(item)).join(',');
   const submission = {
     task_type: 'trake',
     payload: {
@@ -5069,7 +5146,7 @@ if (window.ResizeObserver && els.videoShell) {
   videoAsrSizeObserver.observe(els.videoShell);
 }
 window.addEventListener('resize', syncVideoAsrPanelHeight);
-els.videoBackBtn.addEventListener('click', () => seekVideoToSeconds((els.player.currentTime || 0) - 5, true));
+els.videoBackBtn.addEventListener('click', () => seekVideoToSeconds((els.player.currentTime || 0) - 5, !els.player.paused));
 els.videoPlayBtn.addEventListener('click', () => {
   if (els.player.paused) {
     els.player.play().catch(() => {});
@@ -5077,7 +5154,7 @@ els.videoPlayBtn.addEventListener('click', () => {
     els.player.pause();
   }
 });
-els.videoForwardBtn.addEventListener('click', () => seekVideoToSeconds((els.player.currentTime || 0) + 5, true));
+els.videoForwardBtn.addEventListener('click', () => seekVideoToSeconds((els.player.currentTime || 0) + 5, !els.player.paused));
 els.player.addEventListener('click', () => {
   if (els.player.paused) {
     els.player.play().catch(() => {});
@@ -5315,9 +5392,9 @@ document.addEventListener('keydown', event => {
         els.player.pause();
       }
     } else if (event.key === 'ArrowLeft') {
-      seekVideoToSeconds((els.player.currentTime || 0) - (event.shiftKey ? 10 : 1), true);
+      seekVideoToSeconds((els.player.currentTime || 0) - (event.shiftKey ? 10 : 1), !els.player.paused);
     } else if (event.key === 'ArrowRight') {
-      seekVideoToSeconds((els.player.currentTime || 0) + (event.shiftKey ? 10 : 1), true);
+      seekVideoToSeconds((els.player.currentTime || 0) + (event.shiftKey ? 10 : 1), !els.player.paused);
     }
     return;
   }

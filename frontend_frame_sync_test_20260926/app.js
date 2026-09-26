@@ -46,6 +46,8 @@ const state = {
   activeVideoItem: null,
   activeShotContextFrames: [],
   activeFrameContextFrames: [],
+  frameContextPending: false,
+  frameContextRequestId: 0,
   frameOverviewFrames: [],
   imageItem: null,
   hoveredCardItem: null,
@@ -1873,6 +1875,8 @@ function renderVideoFrameStrip(activeItem) {
   if (!els.videoFrameStrip) return;
   renderVideoFrameItems(uniqueVideoFrames(activeItem.video_id, activeItem), activeItem);
   state.activeFrameContextFrames = [];
+  state.frameContextPending = false;
+  state.frameContextRequestId += 1;
   state.activeShotContextFrames = [];
   if (els.expandShotContextBtn) els.expandShotContextBtn.disabled = true;
   if (els.expandFrameContextBtn) els.expandFrameContextBtn.disabled = false;
@@ -1903,51 +1907,69 @@ function renderVideoFrameStrip(activeItem) {
     });
   }
 
-  // Load all frames of the video into the bottom filmstrip!
-  const frameCacheKey = `${activeItem.video_id}:all_frames`;
-  let frameReq = state.shotContextCache.get(frameCacheKey);
-  if (!frameReq) {
-    const params = new URLSearchParams({
-      timestamp_ms: String(timestampMs),
-      count: '0'
-    });
-    const url = `/frame-context/${encodeURIComponent(activeItem.video_id)}?${params}`;
-    frameReq = fetch(url).then(async response => {
-      if (!response.ok) {
-        const error = new Error(`frame context HTTP ${response.status}`);
-        error.status = response.status;
-        throw error;
-      }
-      return response.json();
-    });
-    state.shotContextCache.set(frameCacheKey, frameReq);
-    frameReq.catch(() => state.shotContextCache.delete(frameCacheKey));
-  }
+  loadVideoFrameContextWindow(activeItem, timestampMs);
+}
 
-  frameReq.then(payload => {
+function loadVideoFrameContextWindow(activeItem, timestampMs) {
+  if (state.frameContextPending) return;
+  const requestId = ++state.frameContextRequestId;
+  state.frameContextPending = true;
+  const params = new URLSearchParams({
+    timestamp_ms: String(Math.max(0, Math.round(timestampMs))),
+    count: '49'
+  });
+  const url = `/frame-context/${encodeURIComponent(activeItem.video_id)}?${params}`;
+  fetch(url).then(async response => {
+    if (!response.ok) {
+      const error = new Error(`frame context HTTP ${response.status}`);
+      error.status = response.status;
+      throw error;
+    }
+    return response.json();
+  }).then(payload => {
     const isStillActive = state.activeVideoItem
       && state.activeVideoItem.video_id === activeItem.video_id;
-    if (!isStillActive || !Array.isArray(payload.frames) || payload.frames.length === 0) return;
+    if (requestId !== state.frameContextRequestId || !isStillActive
+      || !Array.isArray(payload.frames) || payload.frames.length === 0) return;
     const mergedFrames = [...payload.frames];
-    if (activeItem?.keyframe_id && !mergedFrames.some(frame => frame.keyframe_id === activeItem.keyframe_id)) {
+    if (activeItem?.keyframe_id
+      && Math.abs(answerTimeMs(activeItem) - timestampMs) <= 1000
+      && !mergedFrames.some(frame => frame.keyframe_id === activeItem.keyframe_id)) {
       mergedFrames.push(activeItem);
+      mergedFrames.sort((a, b) => answerTimeMs(a) - answerTimeMs(b));
     }
     state.activeFrameContextFrames = mergedFrames;
     renderVideoFrameItems(mergedFrames, activeItem);
-
-    // Ensure active/candidate frame is centered in view
     centerActiveFrameInStrip(false);
     window.requestAnimationFrame(() => centerActiveFrameInStrip(false));
-    window.setTimeout(() => centerActiveFrameInStrip(false), 80);
-    window.setTimeout(() => centerActiveFrameInStrip(false), 200);
   }).catch(error => {
-    // If frame-context fails or 503, fallback to shot-context or retry
     if (state.activeShotContextFrames && state.activeShotContextFrames.length > 0) {
       renderVideoFrameItems(state.activeShotContextFrames, activeItem);
     } else if (error.status === 503 && state.activeVideoItem?.keyframe_id === activeItem.keyframe_id) {
-      window.setTimeout(() => renderVideoFrameStrip(activeItem), 750);
+      window.setTimeout(() => loadVideoFrameContextWindow(activeItem, timestampMs), 750);
+    }
+  }).finally(() => {
+    if (requestId === state.frameContextRequestId) {
+      state.frameContextPending = false;
+      maybeLoadAdjacentVideoFrameContext();
     }
   });
+}
+
+function maybeLoadAdjacentVideoFrameContext() {
+  if (state.frameContextPending || !state.activeVideoItem || !state.activeFrameContextFrames.length) return;
+  const frames = state.activeFrameContextFrames;
+  const firstMs = answerTimeMs(frames[0]);
+  const lastMs = answerTimeMs(frames[frames.length - 1]);
+  const currentMs = Math.max(0, (Number(els.player.currentTime) || 0) * 1000);
+  const duration = Number.isFinite(els.player.duration) ? els.player.duration * 1000 : 0;
+  const outsideWindow = currentMs < firstMs || currentMs > lastMs;
+  const nearForwardEdge = !els.player.paused
+    && currentMs >= lastMs - Math.min(1500, Math.max(250, (lastMs - firstMs) * 0.15))
+    && (!duration || currentMs < duration - 1500);
+  if (outsideWindow || nearForwardEdge) {
+    loadVideoFrameContextWindow(state.activeVideoItem, currentMs);
+  }
 }
 
 let lastAutoScrollTime = 0;
@@ -1957,6 +1979,7 @@ function updateVideoFrameStripActive(autoScroll = false) {
   const current = Number.isFinite(els.player.currentTime) ? els.player.currentTime : 0;
   const thumbs = [...els.videoFrameStrip.querySelectorAll('.video-frame-thumb')];
   const active = findActiveStripThumb(current);
+  maybeLoadAdjacentVideoFrameContext();
   thumbs.forEach(btn => btn.classList.remove('is-active'));
   if (active) {
     active.classList.add('is-active');
