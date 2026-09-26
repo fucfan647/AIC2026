@@ -8,6 +8,7 @@ const state = {
   similarityTextWeight: 30,
   asrWeight: 20,
   asrOnly: false,
+  videoNOnly: typeof localStorage !== 'undefined' ? localStorage.getItem('aic_video_n_only') === 'true' : false,
   autoTranslate: typeof localStorage !== 'undefined' ? localStorage.getItem('aic_auto_translate') === 'true' : false,
   stages: [{id: 1, name: 'Hành động A', query: '', translatedQuery: '', ocrQuery: '', asrQuery: '', ocrWeight: 41, asrWeight: 20}],
   temporalSessionId: null,
@@ -30,6 +31,7 @@ const state = {
   teamVotes: [],
   trakeFrames: [],
   trakeUsers: {},
+  teamNote: { content: '', updated_by: '', client_id: '', updated_at: 0 },
   myTrakeEvent: 1,
   trakeDrawerOpen: false,
   queryViewers: {},
@@ -101,8 +103,10 @@ const els = {
   videoActiveQueryContent: document.getElementById('videoActiveQueryContent'),
   globalSimilarityBtn: document.getElementById('globalSimilarityBtn'),
   quickNoteBtn: document.getElementById('quickNoteBtn'),
+  videoNToggleBtn: document.getElementById('videoNToggleBtn'),
   quickNoteModal: document.getElementById('quickNoteModal'),
   quickNoteTextarea: document.getElementById('quickNoteTextarea'),
+  quickNoteStatus: document.getElementById('quickNoteStatus'),
   closeQuickNoteBtn: document.getElementById('closeQuickNoteBtn'),
   clearQuickNoteBtn: document.getElementById('clearQuickNoteBtn'),
   globalSimilarityPopover: document.getElementById('globalSimilarityPopover'),
@@ -192,6 +196,7 @@ const els = {
   imagePreview: document.getElementById('imagePreview'),
   imageMeta: document.getElementById('imageMeta'),
   imageTextDetails: document.getElementById('imageTextDetails'),
+  imageOpenVideoBtn: document.getElementById('imageOpenVideoBtn'),
   imageAddTrayBtn: document.getElementById('imageAddTrayBtn'),
   closeImageBtn: document.getElementById('closeImageBtn'),
   errorBanner: document.getElementById('errorBanner'),
@@ -917,6 +922,61 @@ function closeShortcutsModal() {
 }
 
 const NOTE_STORAGE_KEY = 'aic_user_quick_note';
+let noteSyncTimer = null;
+
+function renderQuickNoteStatus() {
+  if (!els.quickNoteStatus) return;
+  const note = state.teamNote;
+  if (note && note.updated_at) {
+    const timeStr = new Date(note.updated_at * 1000).toLocaleTimeString([], {
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit'
+    });
+    const author = note.updated_by || 'Thành viên';
+    els.quickNoteStatus.textContent = `Đồng bộ: ${author} (${timeStr})`;
+  } else {
+    els.quickNoteStatus.textContent = 'Đồng bộ cả đội';
+  }
+}
+
+function applyTeamNote(note) {
+  if (!note || typeof note !== 'object') return;
+  state.teamNote = note;
+  const isFocused = document.activeElement === els.quickNoteTextarea;
+  if (els.quickNoteTextarea && !isFocused) {
+    els.quickNoteTextarea.value = note.content || '';
+    localStorage.setItem(NOTE_STORAGE_KEY, note.content || '');
+  }
+  renderQuickNoteStatus();
+}
+
+function syncQuickNoteToServer(content) {
+  if (els.quickNoteStatus) {
+    els.quickNoteStatus.textContent = 'Đang đồng bộ...';
+  }
+  fetch('/team/note', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({
+      content: content,
+      client_id: state.clientId,
+      name: state.memberName || state.dresUsername || 'Thành viên'
+    })
+  }).then(res => {
+    if (res.ok) return res.json();
+    throw new Error('Sync failed');
+  }).then(teamState => {
+    if (teamState && teamState.team_note) {
+      state.teamNote = teamState.team_note;
+      renderQuickNoteStatus();
+    }
+  }).catch(() => {
+    if (els.quickNoteStatus) {
+      els.quickNoteStatus.textContent = 'Lưu máy (Lỗi sync)';
+    }
+  });
+}
 
 function openQuickNoteModal() {
   if (!els.quickNoteModal) return;
@@ -924,7 +984,12 @@ function openQuickNoteModal() {
   els.quickNoteBtn?.classList.add('is-active');
   els.quickNoteBtn?.setAttribute('aria-expanded', 'true');
   if (els.quickNoteTextarea) {
-    els.quickNoteTextarea.value = localStorage.getItem(NOTE_STORAGE_KEY) || '';
+    if (state.teamNote && state.teamNote.updated_at) {
+      els.quickNoteTextarea.value = state.teamNote.content || '';
+    } else {
+      els.quickNoteTextarea.value = localStorage.getItem(NOTE_STORAGE_KEY) || '';
+    }
+    renderQuickNoteStatus();
     setTimeout(() => els.quickNoteTextarea.focus(), 30);
   }
 }
@@ -1528,6 +1593,32 @@ function applyVideoFilter(results, videoFilter) {
   const rankedResults = sortResults(results);
   if (!normalizedFilter) return rankedResults;
   return rankedResults.filter(item => normalizeVideoId(item.video_id) === normalizedFilter);
+}
+
+function isVideoN(item) {
+  return /^N\d{3}[-_]V\d{3}(?:$|[_-])/i.test(normalizeVideoId(item?.video_id));
+}
+
+function applyVideoNScope(results) {
+  if (!state.videoNOnly) return (results || []).filter(item => !isVideoN(item));
+  const framesPerVideo = new Map();
+  return (results || []).filter(item => {
+    if (!isVideoN(item)) return false;
+    const videoId = normalizeVideoId(item.video_id).replaceAll('_', '-');
+    const currentCount = framesPerVideo.get(videoId) || 0;
+    if (currentCount >= 1) return false;
+    framesPerVideo.set(videoId, currentCount + 1);
+    return true;
+  });
+}
+
+function syncVideoNToggle() {
+  if (!els.videoNToggleBtn) return;
+  els.videoNToggleBtn.classList.toggle('is-active', state.videoNOnly);
+  els.videoNToggleBtn.setAttribute('aria-pressed', String(state.videoNOnly));
+  els.videoNToggleBtn.title = state.videoNOnly
+    ? 'Đang chỉ hiển thị video N; bấm để trở về chế độ loại video N'
+    : 'Video N đang bị loại khỏi kết quả; bấm để chỉ hiển thị video N';
 }
 
 function searchTopK() {
@@ -2894,6 +2985,15 @@ function closeFrameImage() {
   els.imageModal.hidden = true;
 }
 
+function openImageFrameInVideo() {
+  const item = state.imageItem;
+  if (!item?.video_id) return;
+  closeFrameImage();
+  closeFrameOverview();
+  closeShotOverview();
+  openResult(item);
+}
+
 function selectResult(item) {
   void addFrameToBothTrays(item);
 }
@@ -3724,6 +3824,9 @@ async function logoutDres() {
 }
 
 function applyTeamState(teamState) {
+  if (teamState.team_note && typeof teamState.team_note === 'object') {
+    applyTeamNote(teamState.team_note);
+  }
   if (Array.isArray(teamState.votes)) {
     state.teamVotes = teamState.votes;
   }
@@ -3820,6 +3923,7 @@ function connectTeamSocket() {
         || payload.members !== undefined
         || payload.trake_frames !== undefined
         || payload.trake_users !== undefined
+        || payload.team_note !== undefined
       ) {
         applyTeamState(payload);
       }
@@ -4354,7 +4458,8 @@ async function performSearch(requestedTemporalStageIndex = null, translatedQuery
   }
   const videoFilter = collectVideoFilter();
   const top_k = searchTopK();
-  const requestTopK = !temporal && !multi ? top_k * 3 : top_k;
+  const requestTopK = top_k;
+  const videoScope = state.videoNOnly ? 'n-only' : 'exclude-n';
   const invalidMultiQuery = multi && (
     queries.length < 2
     || queries.length > 5
@@ -4406,6 +4511,7 @@ async function performSearch(requestedTemporalStageIndex = null, translatedQuery
           image_weight: (100 - state.similarityTextWeight) / 100,
           text_weight: state.similarityTextWeight / 100,
           top_k: requestTopK,
+          video_scope: videoScope,
           video_id: videoFilter || undefined,
           search_mode: 'similarity',
           embedding_model: state.embeddingModel
@@ -4413,6 +4519,7 @@ async function performSearch(requestedTemporalStageIndex = null, translatedQuery
           query: '',
           asr_query: asrQuery,
           top_k: requestTopK,
+          video_scope: videoScope,
           video_id: videoFilter || undefined,
           search_mode: 'hybrid',
           embedding_model: state.embeddingModel,
@@ -4426,6 +4533,7 @@ async function performSearch(requestedTemporalStageIndex = null, translatedQuery
           asr_query: multi ? undefined : asrQuery,
           queries: multi ? queries : undefined,
           top_k: requestTopK,
+          video_scope: videoScope,
           video_id: videoFilter || undefined,
           search_mode: 'hybrid',
           embedding_model: state.embeddingModel,
@@ -4453,7 +4561,8 @@ async function performSearch(requestedTemporalStageIndex = null, translatedQuery
             query: item,
             ocr_query: stageOcrQuery,
             asr_query: stageAsrQuery,
-            top_k,
+            top_k: requestTopK,
+            video_scope: videoScope,
             video_id: videoFilter || undefined,
             search_mode: 'hybrid',
             embedding_model: state.embeddingModel,
@@ -4469,7 +4578,7 @@ async function performSearch(requestedTemporalStageIndex = null, translatedQuery
       const fusedResults = fuseMultiQueryResults(
         payloads,
         queries.map((item, index) => item || (ocrQueries[index] ? `OCR: ${ocrQueries[index]}` : `ASR: ${asrQueries[index]}`)),
-        top_k
+        requestTopK
       );
       payload = {
         results: fusedResults,
@@ -4529,7 +4638,7 @@ async function performSearch(requestedTemporalStageIndex = null, translatedQuery
           };
         })
       : (payload.results || []).map(item => ({...item, stage: 1}));
-    const filteredResults = applyVideoFilter(backendResults, videoFilter);
+    const filteredResults = applyVideoNScope(applyVideoFilter(backendResults, videoFilter));
     state.results = temporal
       ? filteredResults.slice(0, 200)
       : multi ? filteredResults.slice(0, top_k)
@@ -4580,6 +4689,7 @@ async function performSearch(requestedTemporalStageIndex = null, translatedQuery
     }).catch(() => {});
     trackThumbnailTimings(renderStarted);
     const filterMeta = videoFilter ? ` - lọc ${normalizeVideoId(videoFilter)} trong ${payload.filtered_candidates ?? backendResults.length} frame` : '';
+    const videoScopeMeta = state.videoNOnly ? ' · chỉ video N' : ' · đã loại video N';
     els.searchTimingBtn.textContent = `Tổng thời gian: ${formatMilliseconds(clientTotalMs)}`;
     els.searchTimingBtn.disabled = false;
     els.searchTimingBtn.hidden = false;
@@ -4594,7 +4704,7 @@ async function performSearch(requestedTemporalStageIndex = null, translatedQuery
     const temporalMeta = temporal ? `Temporal ${payload.stage_count || queries.length} hành động · ` : '';
     const anchorMeta = temporal && payload.anchor_stage ? `anchor H${payload.anchor_stage} · ` : '';
     const ocrModelLabel = state.ocrModel === 'union' ? 'Union OCR' : (state.ocrModel === 'monkey' ? 'MonkeyOCRv2' : 'PP-OCRv6');
-    els.searchMeta.textContent = `${modelLabel} · ${ocrModelLabel} · ${temporalMeta}${anchorMeta}${backendMethodLabel(payload.search_backend)} · ${weightMeta}${filterMeta}`;
+    els.searchMeta.textContent = `${modelLabel} · ${ocrModelLabel} · ${temporalMeta}${anchorMeta}${backendMethodLabel(payload.search_backend)} · ${weightMeta}${filterMeta}${videoScopeMeta}`;
     els.results.scrollTo({top: 0, left: 0, behavior: 'smooth'});
     setStatus('Tìm kiếm hoàn tất', 'ok', 'Done');
     setLog(`[SEARCH DONE] Hoàn thành tìm kiếm trong ${Math.round(clientTotalMs)}ms (Server: ${Math.round(backendTotalMs)}ms).\nKết quả: ${payload.results?.length || 0} frames.\nModel: ${modelLabel}\nBackend: ${payload.search_backend || 'Faiss'}`);
@@ -4719,6 +4829,23 @@ els.embeddingModelToggle.addEventListener('click', async () => {
   syncEmbeddingModelControls();
   setStatus(`Mô hình: ${getEmbeddingModelLabel(state.embeddingModel)} (Alt+M)`, 'ok');
 });
+
+if (els.videoNToggleBtn) {
+  els.videoNToggleBtn.addEventListener('click', () => {
+    state.videoNOnly = !state.videoNOnly;
+    localStorage.setItem('aic_video_n_only', String(state.videoNOnly));
+    syncVideoNToggle();
+    setStatus(
+      state.videoNOnly ? 'Chế độ chỉ tìm video N đã bật.' : 'Video N sẽ bị loại khỏi kết quả.',
+      'ok'
+    );
+    const hasQuery = collectQueries().some(Boolean)
+      || collectOcrQueries().some(Boolean)
+      || collectAsrQueries().some(Boolean)
+      || Boolean(state.similarityItem);
+    if (hasQuery) void performSearch();
+  });
+}
 
 if (els.autoTranslateToggle) {
   els.autoTranslateToggle.addEventListener('click', () => {
@@ -4874,14 +5001,28 @@ if (els.quickNoteModal) {
 if (els.quickNoteTextarea) {
   els.quickNoteTextarea.value = localStorage.getItem(NOTE_STORAGE_KEY) || '';
   els.quickNoteTextarea.addEventListener('input', () => {
-    localStorage.setItem(NOTE_STORAGE_KEY, els.quickNoteTextarea.value);
+    const val = els.quickNoteTextarea.value;
+    localStorage.setItem(NOTE_STORAGE_KEY, val);
+    if (els.quickNoteStatus) {
+      els.quickNoteStatus.textContent = 'Đang gõ...';
+    }
+    clearTimeout(noteSyncTimer);
+    noteSyncTimer = setTimeout(() => {
+      syncQuickNoteToServer(val);
+    }, 400);
+  });
+  els.quickNoteTextarea.addEventListener('blur', () => {
+    clearTimeout(noteSyncTimer);
+    syncQuickNoteToServer(els.quickNoteTextarea.value);
   });
 }
 if (els.clearQuickNoteBtn) {
   els.clearQuickNoteBtn.addEventListener('click', () => {
-    if (confirm('Bạn có chắc muốn xóa toàn bộ ghi chú không?')) {
+    if (confirm('Bạn có chắc muốn xóa toàn bộ ghi chú của cả đội không?')) {
       localStorage.removeItem(NOTE_STORAGE_KEY);
       if (els.quickNoteTextarea) els.quickNoteTextarea.value = '';
+      clearTimeout(noteSyncTimer);
+      syncQuickNoteToServer('');
     }
   });
 }
@@ -4901,6 +5042,7 @@ els.saveMemberNameBtn.addEventListener('click', saveMemberName);
 els.memberBackBtn.addEventListener('click', backToEvaluation);
 els.closeImageBtn.addEventListener('click', closeFrameImage);
 document.querySelector('[data-close-image]').addEventListener('click', closeFrameImage);
+els.imageOpenVideoBtn.addEventListener('click', openImageFrameInVideo);
 els.imageAddTrayBtn.addEventListener('click', async () => {
   if (state.imageItem && await addKeyframeToTray(state.imageItem)) {
     setImageAddTrayState(true);
@@ -5237,6 +5379,7 @@ document.addEventListener('keydown', event => {
 renderStages();
 syncSearchModeControls();
 syncEmbeddingModelControls();
+syncVideoNToggle();
 syncFusionWeights();
 renderResults();
 renderSelection();

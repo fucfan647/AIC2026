@@ -56,6 +56,9 @@ _RESOURCE_RECORDS_PATH = (
 )
 DEFAULT_RECORDS_PATH = _REPO_RECORDS_PATH if _REPO_RECORDS_PATH.is_file() else _RESOURCE_RECORDS_PATH
 DEFAULT_DELETED_MANIFEST = FRONTEND_DIR.parent / "frames_deleted/active_deleted_manifest.jsonl"
+DEFAULT_OCR_INDEX = Path(os.environ["OCR_INDEX"]) if os.getenv("OCR_INDEX") else (
+    FRONTEND_DIR.parent.parent / "aic2026_resources/local_indexes/paddle_ocr.sqlite"
+)
 DEFAULT_ASR_INDEX = Path(os.environ["ASR_INDEX"]) if os.getenv("ASR_INDEX") else (
     FRONTEND_DIR.parent.parent
     / "/GuestShare_NAS/WorkingSpace/Personal/nghiadq/backend_final/system/backend/artifacts/asr_index/asr.sqlite"
@@ -645,6 +648,7 @@ def create_app(
     keyframes_dir: Optional[Path] = None,
     thumbnail_root: Optional[Path] = None,
     team_hub_url: str = "",
+    ocr_index_path: Optional[Path] = None,
     asr_index_path: Optional[Path] = None,
 ) -> FastAPI:
     if not team_hub_url:
@@ -652,6 +656,7 @@ def create_app(
     team_hub_url = team_hub_url.rstrip("/")
 
     translator_url = os.getenv("TRANSLATOR_URL", "http://127.0.0.1:8031")
+    ocr_index_path = Path(ocr_index_path or DEFAULT_OCR_INDEX).resolve()
     asr_index_path = Path(asr_index_path or DEFAULT_ASR_INDEX).resolve()
     video_path_by_id: Dict[str, str] = {}
     shot_frames_by_video: Dict[str, List[Dict[str, Any]]] = {}
@@ -680,6 +685,107 @@ def create_app(
             metadata_ready.set()
 
     threading.Thread(target=load_metadata_background, daemon=True).start()
+    extended_metadata_cache: Dict[str, Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]] = {}
+    extended_metadata_lock = threading.Lock()
+
+    def load_extended_local_metadata(video_id: str) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+        """Load M/N/S frame metadata lazily from the extracted local resources."""
+        requested_id = str(video_id or "").strip().upper()
+        if not requested_id or keyframes_dir is None:
+            return [], []
+        if requested_id in extended_metadata_cache:
+            return extended_metadata_cache[requested_id]
+
+        if re.fullmatch(r"M\d{2}[-_]V\d{3}", requested_id):
+            local_video_id = requested_id.replace("-", "_")
+            keyframe_video_id = local_video_id.replace("_", "-")
+        elif re.fullmatch(r"[NS]\d{2,3}[-_]V\d{3}", requested_id):
+            local_video_id = requested_id.replace("_", "-")
+            keyframe_video_id = local_video_id
+        else:
+            return [], []
+
+        video_dir = Path(keyframes_dir) / local_video_id
+        if not video_dir.is_dir():
+            return [], []
+
+        frames: List[Dict[str, Any]] = []
+        metadata_file = video_dir / "metadata.json"
+        if metadata_file.is_file():
+            try:
+                payload = json.loads(metadata_file.read_text(encoding="utf-8"))
+                entries = payload.get(local_video_id, payload)
+                if isinstance(entries, dict):
+                    for ordinal, (frame_stem, info) in enumerate(entries.items()):
+                        if not isinstance(info, dict):
+                            continue
+                        timestamp_text = str(info.get("time-stamp", "00:00:00.000"))
+                        match = re.fullmatch(r"(\d+):(\d+):(\d+)(?:\.(\d+))?", timestamp_text)
+                        if match:
+                            hours, minutes, seconds, millis = match.groups()
+                            timestamp_ms = (
+                                (int(hours) * 3600 + int(minutes) * 60 + int(seconds)) * 1000
+                                + int((millis or "0")[:3].ljust(3, "0"))
+                            )
+                        else:
+                            fps = float(info.get("fps", 25.0) or 25.0)
+                            timestamp_ms = round(int(info.get("id", ordinal) or ordinal) * 1000.0 / fps)
+                        image_file = f"{frame_stem}.webp"
+                        if not (video_dir / image_file).is_file():
+                            continue
+                        frames.append({
+                            "keyframe_id": f"{keyframe_video_id}_{frame_stem}",
+                            "video_id": local_video_id,
+                            "shot_id": int(info.get("shot", 0) or 0),
+                            "timestamp_ms": int(timestamp_ms),
+                            "timestamp_seconds": round(timestamp_ms / 1000.0, 3),
+                            "frame_id": int(info.get("id", ordinal) or ordinal),
+                            "source_embedding_row": -1,
+                        })
+            except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
+                print(f"[frontend] Cannot parse local metadata {metadata_file}: {exc}", flush=True)
+        else:
+            fps = 25.0
+            success_file = video_dir / "_SUCCESS"
+            try:
+                success_data = json.loads(success_file.read_text(encoding="utf-8"))
+                fps = float(success_data.get("fps", fps) or fps)
+            except (OSError, ValueError, TypeError, json.JSONDecodeError):
+                pass
+            for image_file in sorted(video_dir.glob("*.webp")):
+                match = re.fullmatch(r"shot_(\d+)_frame_(\d+)", image_file.stem, re.IGNORECASE)
+                if not match:
+                    continue
+                shot_id, original_frame = (int(value) for value in match.groups())
+                timestamp_ms = round(original_frame * 1000.0 / fps)
+                frames.append({
+                    "keyframe_id": f"{keyframe_video_id}_{image_file.stem}",
+                    "video_id": local_video_id,
+                    "shot_id": shot_id,
+                    "timestamp_ms": int(timestamp_ms),
+                    "timestamp_seconds": round(timestamp_ms / 1000.0, 3),
+                    "frame_id": original_frame,
+                    "source_embedding_row": -1,
+                })
+
+        frames.sort(key=lambda item: (item["timestamp_ms"], item["frame_id"]))
+        frames_by_shot: Dict[int, List[Dict[str, Any]]] = {}
+        for frame in frames:
+            frames_by_shot.setdefault(int(frame["shot_id"]), []).append(frame)
+        shot_frames = [
+            shot_items[len(shot_items) // 2]
+            for _, shot_items in sorted(
+                frames_by_shot.items(),
+                key=lambda item: (item[1][0]["timestamp_ms"], item[0]),
+            )
+        ]
+        result = (frames, shot_frames)
+        with extended_metadata_lock:
+            extended_metadata_cache[requested_id] = result
+            extended_metadata_cache[local_video_id] = result
+            extended_metadata_cache[keyframe_video_id] = result
+        return result
+
     team_socket_hub = TeamSocketHub()
     team_state_lock = asyncio.Lock()
     team_hub_client = httpx.AsyncClient(timeout=60.0, trust_env=False) if team_hub_url else None
@@ -874,23 +980,70 @@ def create_app(
 
     @app.post("/search")
     async def search(request: Request):
-        response = await proxy_backend(request, "/search")
-        if response.status_code != 200 or not deleted_rows:
-            return response
         try:
-            payload = json.loads(bytes(response.body))
-            results = [
-                item for item in payload.get("results", [])
-                if int(item.get("source_embedding_row", -1)) not in deleted_rows
-            ]
+            backend_request = await request.json()
+            if not isinstance(backend_request, dict):
+                raise ValueError("search body must be a JSON object")
+            video_scope = str(backend_request.get("video_scope", "exclude-n")).strip().lower()
+            if video_scope not in {"exclude-n", "n-only"}:
+                video_scope = "exclude-n"
+            requested_top_k = max(1, int(backend_request.get("top_k", 200) or 200))
+            # The backend applies video_scope before vector similarity. Keep a
+            # modest N pool so locally missing archives can be skipped while
+            # still returning the requested number of visible cards.
+            backend_request["video_scope"] = video_scope
+            backend_request["top_k"] = max(1_000, requested_top_k) if video_scope == "n-only" else requested_top_k
+            backend_response = await backend_http_client.post(
+                backend_url.rstrip("/") + "/search",
+                json=backend_request,
+                timeout=300.0,
+            )
+            if backend_response.status_code != 200:
+                return Response(
+                    content=backend_response.content,
+                    status_code=backend_response.status_code,
+                    media_type=backend_response.headers.get("content-type"),
+                )
+            payload = backend_response.json()
+            backend_returned = len(payload.get("results", []))
+
+            def is_n_video(item: Dict[str, Any]) -> bool:
+                video_id = str(item.get("video_id", "")).strip().upper()
+                return re.match(r"^N\d{3}[-_]V\d{3}(?:$|[_-])", video_id) is not None
+
+            results = []
+            n_frames_per_video: Dict[str, int] = {}
+            for item in payload.get("results", []):
+                if int(item.get("source_embedding_row", -1)) in deleted_rows:
+                    continue
+                item_is_n = is_n_video(item)
+                if video_scope == "n-only":
+                    if not item_is_n:
+                        continue
+                    # Do not show N results whose archive has not been
+                    # extracted locally; those cards would contain broken
+                    # images because the GPU server does not host keyframes.
+                    if resolve_local_keyframe_file(str(item.get("keyframe_id", ""))) is None:
+                        continue
+                    normalized_video_id = str(item.get("video_id", "")).strip().upper().replace("_", "-")
+                    if n_frames_per_video.get(normalized_video_id, 0) >= 1:
+                        continue
+                    n_frames_per_video[normalized_video_id] = n_frames_per_video.get(normalized_video_id, 0) + 1
+                elif item_is_n:
+                    continue
+                results.append(item)
+            results = results[:requested_top_k]
             for rank, item in enumerate(results, start=1):
                 item["rank"] = rank
             payload["results"] = results
             payload["returned"] = len(results)
             payload["frontend_excluded_rows"] = len(deleted_rows)
+            payload["frontend_video_scope"] = video_scope
+            payload["frontend_max_frames_per_video"] = 1 if video_scope == "n-only" else None
+            payload["backend_returned_before_scope"] = backend_returned
             return JSONResponse(payload, status_code=200)
         except Exception as exc:  # noqa: BLE001
-            return JSONResponse({"detail": f"Loc frame da xoa that bai: {exc}"}, status_code=502)
+            return JSONResponse({"detail": f"Loc ket qua tim kiem that bai: {exc}"}, status_code=502)
 
     @app.post("/translate-query")
     async def translate_query(request: Request):
@@ -905,7 +1058,91 @@ def create_app(
 
     @app.get("/frame-text/{keyframe_id:path}")
     async def frame_text(keyframe_id: str, request: Request):
-        return await proxy_backend(request, f"/frame-text/{urllib.parse.quote(keyframe_id)}")
+        local_id = urllib.parse.unquote(str(keyframe_id)).strip()
+
+        def read_local_frame_text() -> Optional[Dict[str, Any]]:
+            if not records_path.is_file() or not ocr_index_path.is_file() or not asr_index_path.is_file():
+                return None
+            records_conn = sqlite3.connect(
+                f"file:{records_path.resolve().as_posix()}?mode=ro", uri=True, timeout=10
+            )
+            records_conn.row_factory = sqlite3.Row
+            try:
+                rec = records_conn.execute(
+                    "SELECT row_id, keyframe_id, video_id, shot_id, timestamp_ms, image_file "
+                    "FROM records WHERE keyframe_id = ? LIMIT 1",
+                    (local_id,),
+                ).fetchone()
+            finally:
+                records_conn.close()
+            if rec is None:
+                return None
+
+            row_id = int(rec["row_id"])
+            video_id = str(rec["video_id"] or "")
+            timestamp_ms = int(rec["timestamp_ms"] or 0)
+
+            ocr_conn = sqlite3.connect(
+                f"file:{ocr_index_path.as_posix()}?mode=ro", uri=True, timeout=10
+            )
+            ocr_conn.row_factory = sqlite3.Row
+            try:
+                ocr = ocr_conn.execute(
+                    "SELECT ocr_text, avg_confidence, max_confidence, line_count "
+                    "FROM ocr_frames WHERE keyframe_id = ? LIMIT 1",
+                    (local_id,),
+                ).fetchone()
+            finally:
+                ocr_conn.close()
+
+            asr_conn = sqlite3.connect(
+                f"file:{asr_index_path.as_posix()}?mode=ro", uri=True, timeout=10
+            )
+            asr_conn.row_factory = sqlite3.Row
+            try:
+                asr = asr_conn.execute(
+                    "SELECT text_raw, start_ms, end_ms FROM asr_segments "
+                    "WHERE row_id = ? ORDER BY overlap_ms DESC LIMIT 1",
+                    (row_id,),
+                ).fetchone()
+                if asr is None:
+                    asr = asr_conn.execute(
+                        "SELECT text_raw, start_ms, end_ms FROM asr_segments "
+                        "WHERE video_id = ? AND start_ms <= ? AND ? <= end_ms "
+                        "ORDER BY (end_ms - start_ms) ASC LIMIT 1",
+                        (video_id.upper(), timestamp_ms, timestamp_ms),
+                    ).fetchone()
+            finally:
+                asr_conn.close()
+
+            return {
+                "keyframe_id": local_id,
+                "video_id": video_id,
+                "shot_id": rec["shot_id"],
+                "timestamp_ms": timestamp_ms,
+                "timestamp_seconds": round(timestamp_ms / 1000.0, 3),
+                "image_file": str(rec["image_file"] or ""),
+                "ocr_text": str(ocr["ocr_text"] or "") if ocr else "",
+                "ocr_avg_confidence": float(ocr["avg_confidence"] or 0.0) if ocr else 0.0,
+                "ocr_max_confidence": float(ocr["max_confidence"] or 0.0) if ocr else 0.0,
+                "ocr_line_count": int(ocr["line_count"] or 0) if ocr else 0,
+                "asr_text": str(asr["text_raw"] or "") if asr else "",
+                "asr_start_ms": int(asr["start_ms"]) if asr else None,
+                "asr_end_ms": int(asr["end_ms"]) if asr else None,
+                "asr_start_seconds": round(int(asr["start_ms"]) / 1000.0, 3) if asr else None,
+                "asr_end_seconds": round(int(asr["end_ms"]) / 1000.0, 3) if asr else None,
+                "source": "local-sqlite",
+                "source_embedding_row": row_id,
+            }
+
+        try:
+            local_payload = await asyncio.to_thread(read_local_frame_text)
+        except sqlite3.Error as exc:
+            print(f"[frontend] Cannot read local frame text: {exc}", flush=True)
+            local_payload = None
+        if local_payload is not None:
+            return local_payload
+        return await proxy_backend(request, f"/frame-text/{urllib.parse.quote(local_id)}")
 
     @app.get("/video-asr/{video_id}")
     async def video_asr(video_id: str):
@@ -913,6 +1150,18 @@ def create_app(
             raise HTTPException(status_code=400, detail="Invalid video id")
         if not asr_index_path.is_file():
             raise HTTPException(status_code=503, detail=f"ASR index not found: {asr_index_path}")
+
+        requested_video_id = video_id.strip().upper()
+        canonical_video_id = requested_video_id
+        video_id_aliases = [requested_video_id]
+        video_id_match = re.fullmatch(r"([A-Z]\d{2,3})[-_](V\d{3})", requested_video_id)
+        if video_id_match:
+            group_id, video_number = video_id_match.groups()
+            hyphenated_id = f"{group_id}-{video_number}"
+            underscored_id = f"{group_id}_{video_number}"
+            canonical_video_id = hyphenated_id if group_id.startswith(("N", "S")) else underscored_id
+            video_id_aliases.extend((canonical_video_id, hyphenated_id, underscored_id))
+        video_id_aliases = list(dict.fromkeys(video_id_aliases))
 
         def read_segments() -> List[Dict[str, Any]]:
             connection = sqlite3.connect(
@@ -922,14 +1171,15 @@ def create_app(
             )
             connection.row_factory = sqlite3.Row
             try:
+                placeholders = ",".join("?" for _ in video_id_aliases)
                 rows = connection.execute(
-                    """
-                    SELECT segment_id, start_ms, end_ms, text_raw
+                    f"""
+                    SELECT video_id, segment_id, start_ms, end_ms, text_raw
                     FROM asr_segments
-                    WHERE UPPER(video_id) = UPPER(?)
+                    WHERE video_id IN ({placeholders})
                     ORDER BY start_ms, end_ms, segment_id
                     """,
-                    (video_id,),
+                    video_id_aliases,
                 ).fetchall()
                 return [dict(row) for row in rows]
             finally:
@@ -939,7 +1189,13 @@ def create_app(
             segments = await asyncio.to_thread(read_segments)
         except sqlite3.Error as exc:
             raise HTTPException(status_code=500, detail=f"Cannot read ASR index: {exc}") from exc
-        return {"video_id": video_id.upper(), "segments": segments, "returned": len(segments)}
+        resolved_video_id = str(segments[0]["video_id"]) if segments else canonical_video_id
+        return {
+            "video_id": resolved_video_id,
+            "requested_video_id": requested_video_id,
+            "segments": segments,
+            "returned": len(segments),
+        }
 
     @app.post("/temporal-search")
     async def temporal_search(request: Request):
@@ -959,8 +1215,23 @@ def create_app(
             raise HTTPException(status_code=404, detail="Frame da duoc chuyen sang frames_deleted")
         if not metadata_ready.is_set():
             raise HTTPException(status_code=503, detail="Shot metadata is loading")
+        local_all_frames, local_shot_frames = load_extended_local_metadata(video_id)
+        available_shot_frames = shot_frames_by_video.get(video_id, []) or local_shot_frames
+        available_shot_ids = {int(frame.get("shot_id", -1)) for frame in available_shot_frames}
+        if local_all_frames and shot_id not in available_shot_ids:
+            matched_frame = next(
+                (frame for frame in local_all_frames if frame.get("keyframe_id") == keyframe_id),
+                None,
+            )
+            if matched_frame is None and timestamp_ms is not None:
+                matched_frame = min(
+                    local_all_frames,
+                    key=lambda frame: abs(int(frame.get("timestamp_ms", 0)) - timestamp_ms),
+                )
+            if matched_frame is not None:
+                shot_id = int(matched_frame.get("shot_id", shot_id))
         frames = select_shot_context(
-            shot_frames_by_video.get(video_id, []),
+            available_shot_frames,
             shot_id,
             keyframe_id=keyframe_id,
             timestamp_ms=timestamp_ms,
@@ -978,7 +1249,9 @@ def create_app(
     async def frame_context(request: Request, video_id: str, timestamp_ms: int = 0, count: int = 0):
         if not metadata_ready.is_set():
             raise HTTPException(status_code=503, detail="Frame metadata is loading")
-        frames = select_frame_context(frames_by_video.get(video_id, []), timestamp_ms, count=count)
+        local_all_frames, _ = load_extended_local_metadata(video_id)
+        available_frames = frames_by_video.get(video_id, []) or local_all_frames
+        frames = select_frame_context(available_frames, timestamp_ms, count=count)
         if not frames:
             query = urllib.parse.urlencode({"timestamp_ms": timestamp_ms, "count": count})
             return await proxy_backend(
@@ -1051,30 +1324,68 @@ def create_app(
         parts = stem.rsplit("_", 1)
         if len(parts) == 2:
             video_id, frame_idx = parts[0], parts[1]
-            batch_folder = video_id.split("_")[0]
-            try:
-                num = int(frame_idx)
-                names = [
-                    f"{num:03d}.webp", f"{num}.webp", f"{frame_idx}.webp",
-                    f"{num:04d}.webp", f"{num:05d}.webp", f"{num:06d}.webp",
-                    f"{num:03d}.jpg", f"{num}.jpg", f"{frame_idx}.jpg", f"{frame_idx}.jpeg",
-                    f"{num:04d}.jpg", f"{num:05d}.jpg", f"{num:06d}.jpg",
-                ]
-            except ValueError:
-                names = [f"{frame_idx}.webp", f"{frame_idx}.jpg", f"{frame_idx}.jpeg"]
+            video_ids = [video_id]
+            names: List[str]
+            is_extended_frame = False
 
-            for root in LOCAL_KEYFRAME_ROOTS:
+            # Extended BEiT-3 metadata stores the complete local filename in
+            # the keyframe id. M folders use underscores locally while N
+            # folders use hyphens:
+            #   M07-V024_frame_874 -> M07_V024/frame_874.webp
+            #   N052-V003_shot_0001_frame_000100
+            #       -> N052-V003/shot_0001_frame_000100.webp
+            #   S01-V001_shot_0001_frame_000000
+            #       -> S01-V001/shot_0001_frame_000000.webp
+            extended_frame = re.fullmatch(
+                r"((M\d{2}|N\d{3}|S\d{2})[-_]V\d{3})_(.+)",
+                stem,
+                re.IGNORECASE,
+            )
+            if extended_frame:
+                is_extended_frame = True
+                remote_video_id, batch_id, local_stem = extended_frame.groups()
+                if batch_id.upper().startswith("M"):
+                    local_video_id = remote_video_id.replace("-", "_").upper()
+                else:
+                    local_video_id = remote_video_id.replace("_", "-").upper()
+                video_ids = [local_video_id]
+                names = [f"{local_stem}.webp", f"{local_stem}.jpg", f"{local_stem}.jpeg"]
+            else:
+                try:
+                    num = int(frame_idx)
+                    names = [
+                        f"{num:03d}.webp", f"{num}.webp", f"{frame_idx}.webp",
+                        f"{num:04d}.webp", f"{num:05d}.webp", f"{num:06d}.webp",
+                        f"{num:03d}.jpg", f"{num}.jpg", f"{frame_idx}.jpg", f"{frame_idx}.jpeg",
+                        f"{num:04d}.jpg", f"{num:05d}.jpg", f"{num:06d}.jpg",
+                    ]
+                except ValueError:
+                    names = [f"{frame_idx}.webp", f"{frame_idx}.jpg", f"{frame_idx}.jpeg"]
+
+            batch_folder = re.split(r"[-_]", video_ids[0], maxsplit=1)[0]
+
+            roots_to_search = (
+                [Path(keyframes_dir)]
+                if is_extended_frame and keyframes_dir is not None
+                else LOCAL_KEYFRAME_ROOTS
+            )
+            for root in roots_to_search:
                 if not root.is_dir():
                     continue
-                for name in names:
-                    target = root / video_id / name
-                    if target.is_file():
-                        _local_keyframe_cache[raw] = target
-                        return target
-                    target_batch = root / batch_folder / video_id / name
-                    if target_batch.is_file():
-                        _local_keyframe_cache[raw] = target_batch
-                        return target_batch
+                for local_video_id in video_ids:
+                    for name in names:
+                        target = root / local_video_id / name
+                        if target.is_file():
+                            _local_keyframe_cache[raw] = target
+                            return target
+                        target_batch = root / batch_folder / local_video_id / name
+                        if target_batch.is_file():
+                            _local_keyframe_cache[raw] = target_batch
+                            return target_batch
+
+            if is_extended_frame:
+                _local_keyframe_cache[raw] = None
+                return None
 
         for root in LOCAL_KEYFRAME_ROOTS:
             if not root.is_dir():
@@ -2266,6 +2577,7 @@ def create_app(
     app.state.team_state_path = team_state_path
     app.state.team_capture_dir = team_capture_dir
     app.state.team_hub_url = team_hub_url
+    app.state.ocr_index_path = ocr_index_path
     app.state.asr_index_path = asr_index_path
     return app
 
@@ -2282,6 +2594,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--hls-server-url", default=os.getenv("HLS_SERVER_URL", "http://127.0.0.1:8052"))
     parser.add_argument("--records-path", type=Path, default=DEFAULT_RECORDS_PATH)
+    parser.add_argument("--ocr-index", type=Path, default=DEFAULT_OCR_INDEX)
     parser.add_argument("--asr-index", type=Path, default=DEFAULT_ASR_INDEX)
     parser.add_argument("--deleted-manifest", type=Path, default=DEFAULT_DELETED_MANIFEST)
     parser.add_argument("--query-root", type=Path, default=QUERY_ROOT)
@@ -2314,6 +2627,7 @@ def main() -> int:
         keyframes_dir=args.keyframes_dir,
         thumbnail_root=getattr(args, "thumbnail_root", None),
         team_hub_url=args.team_hub_url,
+        ocr_index_path=args.ocr_index,
         asr_index_path=args.asr_index,
     )
     print(f"Frontend FastAPI: http://{args.host}:{args.port}/")
@@ -2324,6 +2638,7 @@ def main() -> int:
         print("Team Hub: Master Mode (hosting WebSocket /ws/team & saving submissions locally)")
     print(f"Remote HLS server: {args.hls_server_url}")
     print(f"Video records: {args.records_path} (metadata preload runs in background)")
+    print(f"Local OCR index: {args.ocr_index}")
     print(f"Local ASR index: {args.asr_index}")
     print(f"Deleted frame filter: {args.deleted_manifest} ({len(app.state.deleted_rows)} rows)")
     uvicorn.run(app, host=args.host, port=args.port, log_level="info")
